@@ -70,6 +70,21 @@ class BuscarSociosView(generics.ListAPIView):
         return queryset
 
 
+class BuscarCoachesView(generics.ListAPIView):
+    serializer_class = UsuarioSerializer
+    permission_classes = [
+        permissions.IsAuthenticated,
+        EsDuena,
+    ]
+
+    def get_queryset(self):
+        return Usuario.objects.filter(
+            rol="COACH",
+            is_active=True
+        ).order_by("first_name", "last_name", "id")
+
+
+
 class EstadoRegistroFacialView(generics.GenericAPIView):
     permission_classes = [
         permissions.IsAuthenticated,

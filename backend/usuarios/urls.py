@@ -6,7 +6,8 @@ from .views import (
     BuscarSociosView,
     EstadoRegistroFacialView,
     ConsentimientoFacialView,
-    EnrolamientoFacialView
+    EnrolamientoFacialView,
+    BuscarCoachesView,
 )
 
 urlpatterns = [
@@ -39,5 +40,10 @@ urlpatterns = [
         "enrolamiento-facial/",
         EnrolamientoFacialView.as_view(),
         name="enrolamiento-facial"
+    ),
+    path(
+        "coaches/",
+        BuscarCoachesView.as_view(),
+        name="buscar-coaches",
     ),
 ]
