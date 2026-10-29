@@ -1,6 +1,8 @@
 from django.urls import path
 
 from .views import (
+    DetalleGestionCoachView,
+    GestionCoachesView,
     MiPerfilView,
     RegistroSocioView,
     BuscarSociosView,
@@ -8,6 +10,13 @@ from .views import (
     ConsentimientoFacialView,
     EnrolamientoFacialView,
     BuscarCoachesView,
+    GestionCoachesView,
+    DetalleGestionCoachView,
+    GestionSociosView,
+    DetalleGestionSocioView,
+    CambiarContrasenaView,
+    RegistroIMCView,
+    MiFichaSaludView,
 )
 
 urlpatterns = [
@@ -45,5 +54,39 @@ urlpatterns = [
         "coaches/",
         BuscarCoachesView.as_view(),
         name="buscar-coaches",
+    ),
+    path(
+        "gestion-coaches/", 
+        GestionCoachesView.as_view(), 
+        name="gestion-coaches"
+    ),
+    path(
+        "gestion-coaches/<int:pk>/", 
+        DetalleGestionCoachView.as_view(),
+        name="detalle-gestion-coach"),
+    path(
+        "gestion-socios/",
+        GestionSociosView.as_view(),
+        name="gestion-socios"
+    ),
+    path(
+        "gestion-socios/<int:pk>/",
+        DetalleGestionSocioView.as_view(),
+        name="detalle-gestion-socio"
+    ),
+    path(
+        "cambiar-contrasena/",
+        CambiarContrasenaView.as_view(),
+        name="cambiar-contrasena",
+    ),
+    path(
+        "mi-imc/",
+        RegistroIMCView.as_view(),
+        name="mi-imc"
+    ),
+    path(
+        "mi-ficha-salud/",
+        MiFichaSaludView.as_view(),
+        name="mi-ficha-salud"
     ),
 ]

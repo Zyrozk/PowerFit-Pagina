@@ -27,6 +27,17 @@ class Usuario(AbstractUser):
         default=False
     )
 
+    telefono = models.CharField(
+        max_length=15,
+        blank=True,
+        default=""
+    )
+
+    especialidades = models.JSONField(
+        default=list,
+        blank=True
+    )
+
     def __str__(self):
         return f"{self.username} - {self.get_rol_display()}"
 
@@ -100,3 +111,87 @@ class RegistroFacial(models.Model):
 
     def __str__(self):
         return f"Registro facial de {self.socio.username}"
+
+
+class RegistroIMC(models.Model):
+    socio = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="registros_imc"
+    )
+
+    peso = models.DecimalField(
+        max_digits=6,
+        decimal_places=2
+    )
+
+    altura = models.DecimalField(
+        max_digits=5,
+        decimal_places=2
+    )
+
+    imc = models.DecimalField(
+        max_digits=5,
+        decimal_places=2
+    )
+
+    clasificacion = models.CharField(
+        max_length=30
+    )
+
+    fecha_registro = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    class Meta:
+        ordering = ["-fecha_registro", "-id"]
+
+    def __str__(self):
+        return f"IMC de {self.socio.username} - {self.fecha_registro}"
+
+
+class FichaSalud(models.Model):
+    socio = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="ficha_salud"
+    )
+
+    tiene_limitacion = models.BooleanField()
+
+    descripcion_limitacion = models.TextField(
+        blank=True,
+        default=""
+    )
+
+    informacion_adicional = models.TextField(
+        blank=True,
+        default=""
+    )
+
+    nombre_emergencia = models.CharField(
+        max_length=150
+    )
+
+    telefono_emergencia = models.CharField(
+        max_length=20
+    )
+
+    relacion_emergencia = models.CharField(
+        max_length=100
+    )
+
+    declaracion_aceptada = models.BooleanField(
+        default=False
+    )
+
+    fecha_creacion = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    fecha_actualizacion = models.DateTimeField(
+        auto_now=True
+    )
+
+    def __str__(self):
+        return f"Ficha de salud de {self.socio.username}"
