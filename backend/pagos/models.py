@@ -1,3 +1,4 @@
+
 from django.conf import settings
 from django.db import models
 
@@ -42,8 +43,25 @@ class Pago(models.Model):
         default=EstadoPago.PENDIENTE
     )
 
+    comprobante = models.FileField(
+        upload_to="comprobantes/",
+        null=True,
+        blank=True
+    )
+
     fecha_pago = models.DateTimeField(
         auto_now_add=True
+    )
+
+    boleta = models.FileField(
+            upload_to="boletas/",
+            null=True,
+            blank=True
+    )
+
+    motivo_rechazo = models.TextField(
+            blank=True,
+            default=""
     )
 
     def __str__(self):

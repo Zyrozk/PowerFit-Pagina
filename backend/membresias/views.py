@@ -9,6 +9,10 @@ from clases.models import Clase
 from pagos.models import Pago
 from .models import Membresia, Reserva, sumar_mes
 from .serializers import MembresiaSerializer, ReservaSerializer
+from django.core.files.images import get_image_dimensions
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from pathlib import Path
+from PIL import Image, UnidentifiedImageError
 
 
 class SoloDuena(permissions.BasePermission):
@@ -19,6 +23,82 @@ class SoloDuena(permissions.BasePermission):
 def verificar_socio(user):
     if user.rol != 'SOCIO':
         raise PermissionDenied('Esta acción está disponible solo para socios.')
+
+
+def validar_resolucion_pago(pago, decision, datos, archivos):
+    if decision == "RECHAZAR":
+        motivo = str(datos.get("motivo_rechazo", "")).strip()
+
+        if not motivo:
+            raise ValidationError({
+                "motivo_rechazo": "Debes indicar el motivo del rechazo."
+            })
+
+        if len(motivo) > 1000:
+            raise ValidationError({
+                "motivo_rechazo": "El motivo no puede superar los 1000 caracteres."
+            })
+
+        return None, motivo
+
+    if decision != "APROBAR":
+        raise ValidationError({
+            "decision": "Usa APROBAR o RECHAZAR."
+        })
+
+    if pago.metodo_pago == Pago.MetodoPago.TRANSFERENCIA:
+        if not pago.comprobante:
+            raise ValidationError({
+                "comprobante": "El pago no tiene comprobante de transferencia."
+            })
+
+        return None, ""
+
+    boleta = archivos.get("boleta")
+
+    if boleta is None:
+        raise ValidationError({
+            "boleta": "Debes adjuntar la boleta antes de aprobar."
+        })
+
+    if boleta.size > 10 * 1024 * 1024:
+        raise ValidationError({
+            "boleta": "La boleta no puede superar los 10 MB."
+        })
+
+    extension = Path(boleta.name).suffix.lower()
+
+    if extension not in (".jpg", ".jpeg", ".png", ".webp", ".pdf"):
+        raise ValidationError({
+            "boleta": "Solo se permiten archivos JPG, PNG, WEBP o PDF."
+        })
+
+    boleta.seek(0)
+
+    if extension == ".pdf":
+        if boleta.read(5) != b"%PDF-":
+            raise ValidationError({
+                "boleta": "El archivo no parece ser un PDF válido."
+            })
+    else:
+        try:
+            with Image.open(boleta) as imagen:
+                formato = imagen.format
+                imagen.verify()
+
+            if formato not in ("JPEG", "PNG", "WEBP"):
+                raise ValidationError({
+                    "boleta": "El formato de imagen no es válido."
+                })
+
+        except (UnidentifiedImageError, OSError, ValueError):
+            raise ValidationError({
+                "boleta": "La imagen no es válida."
+            })
+
+    boleta.seek(0)
+
+    return boleta, ""
 
 
 def validar_clase(clase):
@@ -49,52 +129,184 @@ class MembresiasView(generics.ListAPIView):
         return qs.none()
 
 
+
 class ComprarPlanView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request):
         verificar_socio(request.user)
-        plan = request.data.get('plan')
-        metodo = request.data.get('metodo_pago')
+
+        plan = request.data.get("plan")
+        metodo = request.data.get("metodo_pago")
+        comprobante = request.FILES.get("comprobante")
+
         if plan not in Membresia.PRECIOS:
-            raise ValidationError({'plan': 'Plan inválido.'})
+            raise ValidationError({
+                "plan": "Plan inválido."
+            })
+
         if metodo not in Pago.MetodoPago.values:
-            raise ValidationError({'metodo_pago': 'Método de pago inválido.'})
+            raise ValidationError({
+                "metodo_pago": "Método de pago inválido."
+            })
+
+        if metodo == Pago.MetodoPago.TRANSFERENCIA:
+            if comprobante is None:
+                raise ValidationError({
+                    "comprobante": "Debes adjuntar una imagen del comprobante de transferencia."
+                })
+
+            if comprobante.size > 10 * 1024 * 1024:
+                raise ValidationError({
+                    "comprobante": "La imagen no puede superar los 10 MB."
+                })
+
+            from PIL import Image, UnidentifiedImageError
+
+            try:
+                comprobante.seek(0)
+
+                with Image.open(comprobante) as imagen:
+                    formato = imagen.format
+                    imagen.verify()
+
+                if formato not in ("JPEG", "PNG", "WEBP"):
+                    raise ValidationError({
+                        "comprobante": "Solo se permiten imágenes JPG, PNG o WEBP."
+                    })
+
+                comprobante.seek(0)
+
+            except (UnidentifiedImageError, OSError, ValueError):
+                raise ValidationError({
+                    "comprobante": "El archivo no es una imagen válida."
+                })
+
+        elif comprobante is not None:
+            raise ValidationError({
+                "comprobante": "Solo debes adjuntar comprobante si pagas por transferencia."
+            })
+
+        if Membresia.objects.filter(
+            socio=request.user,
+            estado=Membresia.Estado.PENDIENTE
+        ).exists():
+            raise ValidationError({
+                "membresia": "Ya tienes una solicitud de membresía pendiente."
+            })
+
         with transaction.atomic():
-            pago = Pago.objects.create(socio=request.user, tipo_pago=Pago.TipoPago.MEMBRESIA, metodo_pago=metodo, monto=Membresia.PRECIOS[plan], estado=Pago.EstadoPago.PENDIENTE)
-            membresia = Membresia.objects.create(socio=request.user, pago=pago, plan=plan, clases_totales=Membresia.CUPOS[plan], clases_restantes=Membresia.CUPOS[plan])
-        return Response(MembresiaSerializer(membresia).data, status=status.HTTP_201_CREATED)
+            pago = Pago.objects.create(
+                socio=request.user,
+                tipo_pago=Pago.TipoPago.MEMBRESIA,
+                metodo_pago=metodo,
+                monto=Membresia.PRECIOS[plan],
+                estado=Pago.EstadoPago.PENDIENTE,
+                comprobante=comprobante
+            )
+
+            membresia = Membresia.objects.create(
+                socio=request.user,
+                pago=pago,
+                plan=plan,
+                clases_totales=Membresia.CUPOS[plan],
+                clases_restantes=Membresia.CUPOS[plan]
+            )
+
+        return Response(
+            MembresiaSerializer(membresia).data,
+            status=status.HTTP_201_CREATED
+        )
+
+
 
 
 class ResolverMembresiaView(APIView):
     permission_classes = [SoloDuena]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request, pk):
-        decision = request.data.get('decision')
-        if decision not in ('APROBAR', 'RECHAZAR'):
-            raise ValidationError({'decision': 'Usa APROBAR o RECHAZAR.'})
+        decision = request.data.get("decision")
+
+        if decision not in ("APROBAR", "RECHAZAR"):
+            raise ValidationError({
+                "decision": "Usa APROBAR o RECHAZAR."
+            })
+
         with transaction.atomic():
             try:
-                membresia = Membresia.objects.select_for_update().select_related('pago').get(pk=pk)
+                membresia = (
+                    Membresia.objects
+                    .select_for_update()
+                    .select_related("pago")
+                    .get(pk=pk)
+                )
             except Membresia.DoesNotExist:
-                raise NotFound('Membresía no encontrada.')
+                raise NotFound("Membresía no encontrada.")
+
             if membresia.estado != Membresia.Estado.PENDIENTE:
-                raise ValidationError('La membresía ya fue resuelta.')
-            pago = Pago.objects.select_for_update().get(pk=membresia.pago_id)
+                raise ValidationError(
+                    "La membresía ya fue resuelta."
+                )
+
+            pago = (
+                Pago.objects
+                .select_for_update()
+                .get(pk=membresia.pago_id)
+            )
+
             if pago.estado != Pago.EstadoPago.PENDIENTE:
-                raise ValidationError('El pago ya fue resuelto.')
-            if decision == 'APROBAR':
+                raise ValidationError(
+                    "El pago ya fue resuelto."
+                )
+
+            boleta, motivo = validar_resolucion_pago(
+                pago,
+                decision,
+                request.data,
+                request.FILES
+            )
+
+            if decision == "APROBAR":
                 ahora = timezone.now()
+
                 membresia.estado = Membresia.Estado.ACTIVA
                 membresia.fecha_aprobacion = ahora
-                membresia.fecha_vencimiento = sumar_mes(timezone.localdate(ahora))
+                membresia.fecha_vencimiento = sumar_mes(
+                    timezone.localdate(ahora)
+                )
+
                 pago.estado = Pago.EstadoPago.APROBADO
+                pago.motivo_rechazo = ""
+
+                if boleta is not None:
+                    pago.boleta = boleta
+
             else:
                 membresia.estado = Membresia.Estado.RECHAZADA
                 pago.estado = Pago.EstadoPago.RECHAZADO
-            pago.save(update_fields=['estado'])
-            membresia.save(update_fields=['estado', 'fecha_aprobacion', 'fecha_vencimiento'])
-        return Response(MembresiaSerializer(membresia).data)
+                pago.motivo_rechazo = motivo
+
+            pago.save(
+                update_fields=[
+                    "estado",
+                    "boleta",
+                    "motivo_rechazo"
+                ]
+            )
+
+            membresia.save(
+                update_fields=[
+                    "estado",
+                    "fecha_aprobacion",
+                    "fecha_vencimiento"
+                ]
+            )
+
+        return Response(
+            MembresiaSerializer(membresia).data
+        )
 
 
 class ReservasView(generics.ListAPIView):
@@ -158,25 +370,81 @@ class ReservarClaseView(APIView):
         return Response(ReservaSerializer(reserva).data, status=status.HTTP_201_CREATED)
 
 
+
 class ResolverReservaParticularView(APIView):
     permission_classes = [SoloDuena]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request, pk):
-        decision = request.data.get('decision')
-        if decision not in ('APROBAR', 'RECHAZAR'):
-            raise ValidationError({'decision': 'Usa APROBAR o RECHAZAR.'})
+        decision = request.data.get("decision")
+
+        if decision not in ("APROBAR", "RECHAZAR"):
+            raise ValidationError({
+                "decision": "Usa APROBAR o RECHAZAR."
+            })
+
         with transaction.atomic():
             try:
-                reserva = Reserva.objects.select_for_update().select_related('pago').get(pk=pk, pago__isnull=False)
+                reserva = (
+                    Reserva.objects
+                    .select_for_update()
+                    .select_related("pago")
+                    .get(pk=pk, pago__isnull=False)
+                )
             except Reserva.DoesNotExist:
-                raise NotFound('Reserva particular no encontrada.')
+                raise NotFound(
+                    "Reserva particular no encontrada."
+                )
+
             if reserva.estado != Reserva.Estado.PENDIENTE:
-                raise ValidationError('La reserva ya fue resuelta.')
-            pago = Pago.objects.select_for_update().get(pk=reserva.pago_id)
+                raise ValidationError(
+                    "La reserva ya fue resuelta."
+                )
+
+            pago = (
+                Pago.objects
+                .select_for_update()
+                .get(pk=reserva.pago_id)
+            )
+
             if pago.estado != Pago.EstadoPago.PENDIENTE:
-                raise ValidationError('El pago ya fue resuelto.')
-            pago.estado = Pago.EstadoPago.APROBADO if decision == 'APROBAR' else Pago.EstadoPago.RECHAZADO
-            reserva.estado = Reserva.Estado.CONFIRMADA if decision == 'APROBAR' else Reserva.Estado.CANCELADA
-            pago.save(update_fields=['estado'])
-            reserva.save(update_fields=['estado'])
-        return Response(ReservaSerializer(reserva).data)
+                raise ValidationError(
+                    "El pago ya fue resuelto."
+                )
+
+            boleta, motivo = validar_resolucion_pago(
+                pago,
+                decision,
+                request.data,
+                request.FILES
+            )
+
+            if decision == "APROBAR":
+                pago.estado = Pago.EstadoPago.APROBADO
+                pago.motivo_rechazo = ""
+                reserva.estado = Reserva.Estado.CONFIRMADA
+
+                if boleta is not None:
+                    pago.boleta = boleta
+
+            else:
+                pago.estado = Pago.EstadoPago.RECHAZADO
+                pago.motivo_rechazo = motivo
+                reserva.estado = Reserva.Estado.CANCELADA
+
+            pago.save(
+                update_fields=[
+                    "estado",
+                    "boleta",
+                    "motivo_rechazo"
+                ]
+            )
+
+            reserva.save(
+                update_fields=["estado"]
+            )
+
+        return Response(
+            ReservaSerializer(reserva).data
+        )
+

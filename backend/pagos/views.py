@@ -1,16 +1,18 @@
 from datetime import date, datetime, time, timedelta
 
 from django.utils import timezone
-from rest_framework import generics
+from rest_framework import generics, permissions
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import BasePermission, IsAuthenticated
 
 from .models import Pago
-from .serializers import PagoSerializer
+from .serializers import PagoSerializer, PagoDuenaSerializer
 
 from io import BytesIO
 
-from django.http import HttpResponse
+from django.http import HttpResponse, FileResponse
+from django.shortcuts import get_object_or_404
+from rest_framework.views import APIView
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
@@ -23,12 +25,22 @@ class EsDuena(BasePermission):
         )
 
 
+
 class HistorialPagosView(generics.ListAPIView):
     serializer_class = PagoSerializer
-    permission_classes = [IsAuthenticated, EsDuena]
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        pagos = Pago.objects.select_related("socio").order_by("-fecha_pago")
+        usuario = self.request.user
+
+        pagos = Pago.objects.select_related("socio")
+
+        if usuario.rol == "SOCIO":
+            pagos = pagos.filter(socio=usuario)
+        elif usuario.rol != "DUENA":
+            pagos = pagos.none()
+
+        pagos = pagos.order_by("-fecha_pago")
 
         fecha_inicio = self.request.query_params.get("fecha_inicio")
         fecha_fin = self.request.query_params.get("fecha_fin")
@@ -74,6 +86,7 @@ class HistorialPagosView(generics.ListAPIView):
 
 
 class ExportarPagosExcelView(HistorialPagosView):
+    permission_classes = [IsAuthenticated, EsDuena]
 
     def get(self, request, *args, **kwargs):
         pagos = self.get_queryset()
@@ -151,3 +164,101 @@ class ExportarPagosExcelView(HistorialPagosView):
         )
 
         return respuesta 
+
+class SoloDuena(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return (
+            request.user.is_authenticated
+            and request.user.rol == "DUENA"
+        )
+
+
+class PagosDuenaView(generics.ListAPIView):
+    permission_classes = [SoloDuena]
+    serializer_class = PagoDuenaSerializer
+
+    def get_queryset(self):
+        return (
+            Pago.objects
+            .select_related("socio")
+            .order_by("-fecha_pago")
+        )
+
+
+class DocumentoPagoDuenaView(APIView):
+    permission_classes = [IsAuthenticated, EsDuena]
+
+    def get(self, request, pago_id):
+        pago = get_object_or_404(Pago, id=pago_id)
+
+        if pago.metodo_pago == Pago.MetodoPago.TRANSFERENCIA:
+            documento = pago.comprobante
+        else:
+            documento = pago.boleta
+
+        if not documento:
+            return HttpResponse(
+                "Este pago no tiene un documento adjunto.",
+                status=404
+            )
+
+        try:
+            archivo = documento.open("rb")
+        except (FileNotFoundError, OSError):
+            return HttpResponse(
+                "No se encontró el archivo solicitado.",
+                status=404
+            )
+
+        nombre_archivo = documento.name.rsplit("/", 1)[-1]
+
+        return FileResponse(
+            archivo,
+            as_attachment=False,
+            filename=nombre_archivo
+        )
+
+
+class BoletaPagoSocioView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pago_id):
+        if request.user.rol != "SOCIO":
+            return HttpResponse(
+                "No tienes permiso para consultar esta boleta.",
+                status=403
+            )
+
+        pago = get_object_or_404(
+            Pago,
+            id=pago_id,
+            socio=request.user
+        )
+
+        if pago.estado != "APROBADO":
+            return HttpResponse(
+                "La boleta no está disponible para este pago.",
+                status=404
+            )
+
+        if not pago.boleta:
+            return HttpResponse(
+                "Este pago no tiene una boleta adjunta.",
+                status=404
+            )
+
+        try:
+            archivo = pago.boleta.open("rb")
+        except (FileNotFoundError, OSError):
+            return HttpResponse(
+                "No se encontró el archivo solicitado.",
+                status=404
+            )
+
+        nombre_archivo = pago.boleta.name.rsplit("/", 1)[-1]
+
+        return FileResponse(
+            archivo,
+            as_attachment=False,
+            filename=nombre_archivo
+        )
