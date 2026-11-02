@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     'pagos',
     'clases',
     'membresias',
+    'notificaciones.apps.NotificacionesConfig',
 ]
 
 MIDDLEWARE = [

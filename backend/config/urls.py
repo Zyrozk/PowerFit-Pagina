@@ -10,6 +10,7 @@ class EmailTokenObtainPairView(TokenObtainPairView):
     serializer_class = EmailTokenObtainPairSerializer
 
 urlpatterns = [
+    path("api/notificaciones/", include("notificaciones.urls")),
     path("admin/", admin.site.urls),
     path("api/usuarios/", include("usuarios.urls")),
     path("api/pagos/", include("pagos.urls")),
