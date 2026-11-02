@@ -8,5 +8,5 @@ class MembresiaAdmin(admin.ModelAdmin):
 
 @admin.register(Reserva)
 class ReservaAdmin(admin.ModelAdmin):
-    list_display = ('id', 'socio', 'clase', 'estado')
-    list_filter = ('estado',)
+    list_display = ('id', 'socio', 'clase', 'estado', 'asistencia', 'clase_devuelta')
+    list_filter = ('estado', 'asistencia')

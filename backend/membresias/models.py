@@ -46,6 +46,16 @@ class Reserva(models.Model):
         CANCELADA = 'CANCELADA', 'Cancelada'
         PENDIENTE = 'PENDIENTE', 'Pendiente de pago'
 
+    class Asistencia(models.TextChoices):
+        PENDIENTE = 'PENDIENTE', 'Pendiente'
+        ASISTIO = 'ASISTIO', 'Asistió'
+        NO_ASISTIO = 'NO_ASISTIO', 'No asistió'
+
+    asistencia = models.CharField(max_length=12, choices=Asistencia.choices, default=Asistencia.PENDIENTE)
+    fecha_registro_asistencia = models.DateTimeField(null=True, blank=True)
+    registrado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name='asistencias_registradas')
+    clase_devuelta = models.BooleanField(default=False)
+
     socio = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='reservas')
     clase = models.ForeignKey('clases.Clase', on_delete=models.PROTECT, related_name='reservas')
     membresia = models.ForeignKey(Membresia, on_delete=models.PROTECT, null=True, blank=True, related_name='reservas')

@@ -14,5 +14,5 @@ class MembresiaSerializer(serializers.ModelSerializer):
 class ReservaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Reserva
-        fields = ['id', 'socio', 'clase', 'membresia', 'pago', 'estado', 'fecha_creacion']
+        fields = ['id', 'socio', 'clase', 'membresia', 'pago', 'estado', 'fecha_creacion', 'asistencia', 'fecha_registro_asistencia', 'registrado_por', 'clase_devuelta']
         read_only_fields = fields

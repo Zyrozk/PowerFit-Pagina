@@ -448,3 +448,57 @@ class ResolverReservaParticularView(APIView):
             ReservaSerializer(reserva).data
         )
 
+
+
+class RegistrarAsistenciaView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        if request.user.rol not in ('DUENA', 'COACH'):
+            raise PermissionDenied('Solo la dueña o el coach asignado pueden registrar asistencia.')
+
+        asistencia = request.data.get('asistencia')
+        if asistencia not in (Reserva.Asistencia.ASISTIO, Reserva.Asistencia.NO_ASISTIO):
+            raise ValidationError({'asistencia': 'Usa ASISTIO o NO_ASISTIO.'})
+
+        with transaction.atomic():
+            try:
+                reserva = (
+                    Reserva.objects.select_for_update()
+                    .select_related('clase', 'membresia')
+                    .get(pk=pk)
+                )
+            except Reserva.DoesNotExist:
+                raise NotFound('Reserva no encontrada.')
+
+            if request.user.rol == 'COACH' and reserva.clase.coach_id != request.user.pk:
+                raise PermissionDenied('Solo puedes registrar asistencia en tus propias clases.')
+
+            if reserva.estado != Reserva.Estado.CONFIRMADA:
+                raise ValidationError('Solo se registra asistencia en reservas confirmadas.')
+
+            if reserva.asistencia != Reserva.Asistencia.PENDIENTE:
+                raise ValidationError('La asistencia ya fue registrada. No se puede aplicar dos veces.')
+
+            fin_clase = timezone.make_aware(
+                datetime.combine(reserva.clase.fecha, reserva.clase.hora_fin),
+                timezone.get_current_timezone()
+            )
+            if timezone.now() < fin_clase:
+                raise ValidationError('La asistencia se registra una vez finalizada la clase.')
+
+            if asistencia == Reserva.Asistencia.NO_ASISTIO and reserva.membresia_id:
+                membresia = Membresia.objects.select_for_update().get(pk=reserva.membresia_id)
+                if membresia.vigente and membresia.clases_restantes < membresia.clases_totales:
+                    membresia.clases_restantes += 1
+                    membresia.save(update_fields=['clases_restantes'])
+                    reserva.clase_devuelta = True
+
+            reserva.asistencia = asistencia
+            reserva.fecha_registro_asistencia = timezone.now()
+            reserva.registrado_por = request.user
+            reserva.save(update_fields=[
+                'asistencia', 'fecha_registro_asistencia', 'registrado_por', 'clase_devuelta'
+            ])
+
+        return Response(ReservaSerializer(reserva).data)
