@@ -25,13 +25,25 @@ function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          username: usuario,
+          email: usuario,
           password: contrasena,
         }),
       });
-
+      
       if (!respuesta.ok) {
-        throw new Error("Usuario o contraseña incorrectos.");
+        const datosError = await respuesta.json().catch(() => ({}));
+
+        console.error("Error de autenticación:", {
+          codigo: respuesta.status,
+          detalle: datosError,
+        });
+
+        throw new Error(
+          datosError.detail ||
+          datosError.username?.[0] ||
+          datosError.password?.[0] ||
+          "No se pudo iniciar sesión."
+        );
       }
 
       const tokens = await respuesta.json();

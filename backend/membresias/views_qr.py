@@ -258,10 +258,10 @@ class CambioExcepcionalAsistenciaView(APIView):
             except Reserva.DoesNotExist:
                 raise NotFound('Reserva no encontrada.')
 
-            if request.user.rol != 'DUENA':
-             raise PermissionDenied(
-                'Solo la dueña puede realizar cambios excepcionales de asistencia.'
-    )
+            verificar_administrador_clase(
+                request.user,
+                reserva.clase
+                )
 
             if reserva.estado != Reserva.Estado.CONFIRMADA:
                 raise ValidationError(
