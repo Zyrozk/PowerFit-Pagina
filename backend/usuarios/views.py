@@ -10,6 +10,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
+
 
 from .models import RegistroFacial, RegistroIMC, FichaSalud
 from .permisos_faciales import EsDuenaParaEnrolamientoFacial
@@ -41,13 +43,58 @@ class EsDuena(permissions.BasePermission):
 
 
 
+
 class MiPerfilView(generics.RetrieveUpdateAPIView):
     serializer_class = MiPerfilSerializer
     permission_classes = [permissions.IsAuthenticated]
-    http_method_names = ["get", "patch", "head", "options"]
+    parser_classes = [
+        JSONParser,
+        MultiPartParser,
+        FormParser,
+    ]
+    http_method_names = [
+        "get",
+        "patch",
+        "head",
+        "options",
+    ]
 
     def get_object(self):
         return self.request.user
+
+    def perform_update(self, serializer):
+        usuario = self.get_object()
+
+        foto_anterior = (
+            usuario.foto_perfil.name
+            if usuario.foto_perfil
+            else None
+        )
+
+        foto_nueva = serializer.validated_data.get(
+            "foto_perfil"
+        )
+
+        usuario_actualizado = serializer.save()
+
+        if foto_nueva is not None and foto_anterior:
+            nombre_nuevo = (
+                usuario_actualizado.foto_perfil.name
+                if usuario_actualizado.foto_perfil
+                else None
+            )
+
+            if foto_anterior != nombre_nuevo:
+                almacenamiento = (
+                    usuario_actualizado.foto_perfil.storage
+                )
+
+                transaction.on_commit(
+                    lambda: almacenamiento.delete(
+                        foto_anterior
+                    )
+                )
+
 
 
 

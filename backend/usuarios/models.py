@@ -33,6 +33,12 @@ class Usuario(AbstractUser):
         default=""
     )
 
+    foto_perfil = models.ImageField(
+        upload_to="perfiles/",
+        null=True,
+        blank=True
+    )
+
     especialidades = models.JSONField(
         default=list,
         blank=True

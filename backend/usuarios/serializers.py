@@ -19,7 +19,13 @@ class UsuarioSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+
 class MiPerfilSerializer(serializers.ModelSerializer):
+    foto_perfil = serializers.ImageField(
+        required=False,
+        allow_null=True
+    )
+
     class Meta:
         model = Usuario
         fields = [
@@ -29,9 +35,11 @@ class MiPerfilSerializer(serializers.ModelSerializer):
             "last_name",
             "email",
             "telefono",
+            "foto_perfil",
             "rol",
             "reconocimiento_facial_habilitado",
         ]
+
         read_only_fields = [
             "id",
             "username",
@@ -52,6 +60,45 @@ class MiPerfilSerializer(serializers.ModelSerializer):
             )
 
         return email
+
+    def validate_foto_perfil(self, value):
+        if value is None:
+            raise serializers.ValidationError(
+                "Debes seleccionar una fotografía."
+            )
+
+        if value.size > 5 * 1024 * 1024:
+            raise serializers.ValidationError(
+                "La fotografía no puede superar los 5 MB."
+            )
+
+        from PIL import Image, UnidentifiedImageError
+
+        try:
+            value.seek(0)
+
+            with Image.open(value) as imagen:
+                formato = imagen.format
+                imagen.verify()
+
+            value.seek(0)
+
+        except (
+            UnidentifiedImageError,
+            OSError,
+            ValueError
+        ):
+            raise serializers.ValidationError(
+                "El archivo no es una imagen válida."
+            )
+
+        if formato not in ("JPEG", "PNG", "WEBP"):
+            raise serializers.ValidationError(
+                "Solo se permiten imágenes JPG, PNG o WEBP."
+            )
+
+        return value
+
 
 
 class RegistroSocioSerializer(serializers.ModelSerializer):
