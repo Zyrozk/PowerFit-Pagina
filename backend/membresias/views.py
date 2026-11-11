@@ -1,28 +1,36 @@
+
 from datetime import datetime
+from pathlib import Path
+
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import generics, permissions, status
 from rest_framework.exceptions import ValidationError, PermissionDenied, NotFound
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from PIL import Image, UnidentifiedImageError
+
 from clases.models import Clase
 from pagos.models import Pago
 from .models import Membresia, Reserva, sumar_mes
 from .serializers import MembresiaSerializer, ReservaSerializer
-from django.core.files.images import get_image_dimensions
-from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from pathlib import Path
-from PIL import Image, UnidentifiedImageError
+from notificaciones.services import (
+    notificar_solicitud_membresia,
+    notificar_reserva_particular,
+    notificar_resultado_membresia,
+    notificar_resultado_reserva_particular,
+)
 
 
 class SoloDuena(permissions.BasePermission):
     def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.rol == 'DUENA'
+        return request.user.is_authenticated and request.user.rol == "DUENA"
 
 
 def verificar_socio(user):
-    if user.rol != 'SOCIO':
-        raise PermissionDenied('Esta acción está disponible solo para socios.')
+    if user.rol != "SOCIO":
+        raise PermissionDenied("Esta acción está disponible solo para socios.")
 
 
 def validar_resolucion_pago(pago, decision, datos, archivos):
@@ -102,18 +110,42 @@ def validar_resolucion_pago(pago, decision, datos, archivos):
 
 
 def validar_clase(clase):
-    inicio = timezone.make_aware(datetime.combine(clase.fecha, clase.hora_inicio), timezone.get_current_timezone())
+    inicio = timezone.make_aware(
+        datetime.combine(clase.fecha, clase.hora_inicio),
+        timezone.get_current_timezone()
+    )
+
     if not clase.activa or inicio <= timezone.now():
-        raise ValidationError('La clase ya comenzó o no está disponible.')
-    if Reserva.objects.filter(clase=clase, estado__in=[Reserva.Estado.CONFIRMADA, Reserva.Estado.PENDIENTE]).count() >= clase.cupos:
-        raise ValidationError('No quedan cupos disponibles.')
+        raise ValidationError("La clase ya comenzó o no está disponible.")
+
+    if Reserva.objects.filter(
+        clase=clase,
+        estado__in=[
+            Reserva.Estado.CONFIRMADA,
+            Reserva.Estado.PENDIENTE
+        ]
+    ).count() >= clase.cupos:
+        raise ValidationError("No quedan cupos disponibles.")
 
 
 class PlanesView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        return Response([{'codigo': p, 'nombre': nombre, 'clases': Membresia.CUPOS[p], 'precio_clp': Membresia.PRECIOS[p]} for p, nombre in Membresia.Plan.choices] + [{'codigo': 'CLASE_PARTICULAR', 'nombre': 'Clase particular', 'clases': 1, 'precio_clp': 3500}])
+        return Response([
+            {
+                "codigo": p,
+                "nombre": nombre,
+                "clases": Membresia.CUPOS[p],
+                "precio_clp": Membresia.PRECIOS[p]
+            }
+            for p, nombre in Membresia.Plan.choices
+        ] + [{
+            "codigo": "CLASE_PARTICULAR",
+            "nombre": "Clase particular",
+            "clases": 1,
+            "precio_clp": 3500
+        }])
 
 
 class MembresiasView(generics.ListAPIView):
@@ -121,13 +153,17 @@ class MembresiasView(generics.ListAPIView):
     serializer_class = MembresiaSerializer
 
     def get_queryset(self):
-        qs = Membresia.objects.select_related('socio', 'pago').order_by('-fecha_solicitud')
-        if self.request.user.rol == 'DUENA':
-            return qs
-        if self.request.user.rol == 'SOCIO':
-            return qs.filter(socio=self.request.user)
-        return qs.none()
+        qs = Membresia.objects.select_related(
+            "socio", "pago"
+        ).order_by("-fecha_solicitud")
 
+        if self.request.user.rol == "DUENA":
+            return qs
+
+        if self.request.user.rol == "SOCIO":
+            return qs.filter(socio=self.request.user)
+
+        return qs.none()
 
 
 class ComprarPlanView(APIView):
@@ -162,8 +198,6 @@ class ComprarPlanView(APIView):
                     "comprobante": "La imagen no puede superar los 10 MB."
                 })
 
-            from PIL import Image, UnidentifiedImageError
-
             try:
                 comprobante.seek(0)
 
@@ -193,7 +227,16 @@ class ComprarPlanView(APIView):
             estado=Membresia.Estado.PENDIENTE
         ).exists():
             raise ValidationError({
-                "membresia": "Ya tienes una solicitud de membresía pendiente."
+                "membresia": "Ya tienes una solicitud de membresía pendiente. Debes esperar a que sea aprobada o rechazada."
+            })
+
+        if Membresia.objects.filter(
+            socio=request.user,
+            estado=Membresia.Estado.ACTIVA,
+            fecha_vencimiento__gt=timezone.localdate()
+        ).exists():
+            raise ValidationError({
+                "membresia": "Ya tienes una membresía activa. Podrás comprar otra cuando finalice su vigencia."
             })
 
         with transaction.atomic():
@@ -214,12 +257,12 @@ class ComprarPlanView(APIView):
                 clases_restantes=Membresia.CUPOS[plan]
             )
 
+            notificar_solicitud_membresia(membresia)
+
         return Response(
             MembresiaSerializer(membresia).data,
             status=status.HTTP_201_CREATED
         )
-
-
 
 
 class ResolverMembresiaView(APIView):
@@ -304,6 +347,12 @@ class ResolverMembresiaView(APIView):
                 ]
             )
 
+            notificar_resultado_membresia(
+                membresia,
+                aprobada=(decision == "APROBAR"),
+                motivo=motivo
+            )
+
         return Response(
             MembresiaSerializer(membresia).data
         )
@@ -314,61 +363,188 @@ class ReservasView(generics.ListAPIView):
     serializer_class = ReservaSerializer
 
     def get_queryset(self):
-        qs = Reserva.objects.select_related('clase', 'socio', 'membresia').order_by('-fecha_creacion')
-        if self.request.user.rol == 'DUENA':
+        qs = Reserva.objects.select_related(
+            "clase", "socio", "membresia"
+        ).order_by("-fecha_creacion")
+
+        if self.request.user.rol == "DUENA":
             return qs
-        if self.request.user.rol == 'SOCIO':
+
+        if self.request.user.rol == "SOCIO":
             return qs.filter(socio=self.request.user)
-        if self.request.user.rol == 'COACH':
+
+        if self.request.user.rol == "COACH":
             return qs.filter(clase__coach=self.request.user)
+
         return qs.none()
 
 
 class ReservarClaseView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request):
         verificar_socio(request.user)
+
         try:
-            clase_id = int(request.data.get('clase_id'))
+            clase_id = int(request.data.get("clase_id"))
         except (ValueError, TypeError):
-            raise ValidationError({'clase_id': 'Debes indicar una clase válida.'})
-        modalidad = request.data.get('modalidad')
-        if modalidad not in ('MEMBRESIA', 'PARTICULAR'):
-            raise ValidationError({'modalidad': 'Usa MEMBRESIA o PARTICULAR.'})
+            raise ValidationError({
+                "clase_id": "Debes indicar una clase válida."
+            })
+
+        modalidad = request.data.get("modalidad")
+
+        if modalidad not in ("MEMBRESIA", "PARTICULAR"):
+            raise ValidationError({
+                "modalidad": "Usa MEMBRESIA o PARTICULAR."
+            })
+
+        metodo = None
+        comprobante = request.FILES.get("comprobante")
+
+        if modalidad == "PARTICULAR":
+            metodo = request.data.get("metodo_pago")
+
+            if metodo not in Pago.MetodoPago.values:
+                raise ValidationError({
+                    "metodo_pago": "Método de pago inválido."
+                })
+
+            if metodo == Pago.MetodoPago.TRANSFERENCIA:
+                if comprobante is None:
+                    raise ValidationError({
+                        "comprobante": "Debes adjuntar el comprobante de transferencia."
+                    })
+
+                if comprobante.size > 10 * 1024 * 1024:
+                    raise ValidationError({
+                        "comprobante": "El comprobante no puede superar los 10 MB."
+                    })
+
+                try:
+                    comprobante.seek(0)
+
+                    with Image.open(comprobante) as imagen:
+                        formato = imagen.format
+                        imagen.verify()
+
+                    if formato not in ("JPEG", "PNG", "WEBP"):
+                        raise ValidationError({
+                            "comprobante": "Solo se permiten imágenes JPG, PNG o WEBP."
+                        })
+
+                    comprobante.seek(0)
+
+                except (UnidentifiedImageError, OSError, ValueError):
+                    raise ValidationError({
+                        "comprobante": "El archivo no es una imagen válida."
+                    })
+
+            elif comprobante is not None:
+                raise ValidationError({
+                    "comprobante": "Solo debes adjuntar un comprobante si pagas por transferencia."
+                })
+
+        elif comprobante is not None:
+            raise ValidationError({
+                "comprobante": "No debes adjuntar un comprobante al reservar con membresía."
+            })
+
         try:
             with transaction.atomic():
                 try:
-                    clase = Clase.objects.select_for_update().get(pk=clase_id)
+                    clase = Clase.objects.select_for_update().get(
+                        pk=clase_id
+                    )
                 except Clase.DoesNotExist:
-                    raise NotFound('Clase no encontrada.')
-                validar_clase(clase)
-                if Reserva.objects.filter(socio=request.user, clase=clase, estado__in=['CONFIRMADA', 'PENDIENTE']).exists():
-                    raise ValidationError('Ya tienes una reserva para esta clase.')
-                if modalidad == 'MEMBRESIA':
-                    try:
-                        membresia_id = int(request.data.get('membresia_id'))
-                    except (ValueError, TypeError):
-                        raise ValidationError({'membresia_id': 'Debes indicar tu membresía.'})
-                    try:
-                        membresia = Membresia.objects.select_for_update().get(pk=membresia_id, socio=request.user)
-                    except Membresia.DoesNotExist:
-                        raise NotFound('Membresía no encontrada.')
-                    if not membresia.vigente or membresia.clases_restantes == 0:
-                        raise ValidationError('La membresía está vencida, pendiente o sin clases disponibles.')
-                    membresia.clases_restantes -= 1
-                    membresia.save(update_fields=['clases_restantes'])
-                    reserva = Reserva.objects.create(socio=request.user, clase=clase, membresia=membresia)
-                else:
-                    metodo = request.data.get('metodo_pago')
-                    if metodo not in Pago.MetodoPago.values:
-                        raise ValidationError({'metodo_pago': 'Método de pago inválido.'})
-                    pago = Pago.objects.create(socio=request.user, tipo_pago=Pago.TipoPago.CLASE_PARTICULAR, metodo_pago=metodo, monto=3500)
-                    reserva = Reserva.objects.create(socio=request.user, clase=clase, pago=pago, estado=Reserva.Estado.PENDIENTE)
-        except IntegrityError:
-            raise ValidationError('Ya tienes una reserva para esta clase.')
-        return Response(ReservaSerializer(reserva).data, status=status.HTTP_201_CREATED)
+                    raise NotFound("Clase no encontrada.")
 
+                validar_clase(clase)
+
+                if Reserva.objects.filter(
+                    socio=request.user,
+                    clase=clase,
+                    estado__in=[
+                        Reserva.Estado.CONFIRMADA,
+                        Reserva.Estado.PENDIENTE
+                    ]
+                ).exists():
+                    raise ValidationError(
+                        "Ya tienes una reserva para esta clase."
+                    )
+
+                if modalidad == "MEMBRESIA":
+                    try:
+                        membresia_id = int(
+                            request.data.get("membresia_id")
+                        )
+                    except (ValueError, TypeError):
+                        raise ValidationError({
+                            "membresia_id": "Debes indicar tu membresía."
+                        })
+
+                    try:
+                        membresia = (
+                            Membresia.objects
+                            .select_for_update()
+                            .get(
+                                pk=membresia_id,
+                                socio=request.user
+                            )
+                        )
+                    except Membresia.DoesNotExist:
+                        raise NotFound(
+                            "Membresía no encontrada."
+                        )
+
+                    if (
+                        not membresia.vigente
+                        or membresia.clases_restantes == 0
+                    ):
+                        raise ValidationError(
+                            "La membresía está vencida, pendiente o sin clases disponibles."
+                        )
+
+                    membresia.clases_restantes -= 1
+                    membresia.save(
+                        update_fields=["clases_restantes"]
+                    )
+
+                    reserva = Reserva.objects.create(
+                        socio=request.user,
+                        clase=clase,
+                        membresia=membresia
+                    )
+
+                else:
+                    pago = Pago.objects.create(
+                        socio=request.user,
+                        tipo_pago=Pago.TipoPago.CLASE_PARTICULAR,
+                        metodo_pago=metodo,
+                        monto=3500,
+                        estado=Pago.EstadoPago.PENDIENTE,
+                        comprobante=comprobante
+                    )
+
+                    reserva = Reserva.objects.create(
+                        socio=request.user,
+                        clase=clase,
+                        pago=pago,
+                        estado=Reserva.Estado.PENDIENTE
+                    )
+
+                    notificar_reserva_particular(reserva)
+
+        except IntegrityError:
+            raise ValidationError(
+                "Ya tienes una reserva para esta clase."
+            )
+
+        return Response(
+            ReservaSerializer(reserva).data,
+            status=status.HTTP_201_CREATED
+        )
 
 
 class ResolverReservaParticularView(APIView):
@@ -444,61 +620,111 @@ class ResolverReservaParticularView(APIView):
                 update_fields=["estado"]
             )
 
+            notificar_resultado_reserva_particular(
+                reserva,
+                aprobada=(decision == "APROBAR"),
+                motivo=motivo
+            )
+
         return Response(
             ReservaSerializer(reserva).data
         )
-
 
 
 class RegistrarAsistenciaView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
-        if request.user.rol not in ('DUENA', 'COACH'):
-            raise PermissionDenied('Solo la dueña o el coach asignado pueden registrar asistencia.')
+        if request.user.rol not in ("DUENA", "COACH"):
+            raise PermissionDenied(
+                "Solo la dueña o el coach asignado pueden registrar asistencia."
+            )
 
-        asistencia = request.data.get('asistencia')
-        if asistencia not in (Reserva.Asistencia.ASISTIO, Reserva.Asistencia.NO_ASISTIO):
-            raise ValidationError({'asistencia': 'Usa ASISTIO o NO_ASISTIO.'})
+        asistencia = request.data.get("asistencia")
+
+        if asistencia not in (
+            Reserva.Asistencia.ASISTIO,
+            Reserva.Asistencia.NO_ASISTIO
+        ):
+            raise ValidationError({
+                "asistencia": "Usa ASISTIO o NO_ASISTIO."
+            })
 
         with transaction.atomic():
             try:
                 reserva = (
-                    Reserva.objects.select_for_update()
-                    .select_related('clase', 'membresia')
+                    Reserva.objects
+                    .select_for_update()
+                    .select_related("clase", "membresia")
                     .get(pk=pk)
                 )
             except Reserva.DoesNotExist:
-                raise NotFound('Reserva no encontrada.')
+                raise NotFound("Reserva no encontrada.")
 
-            if request.user.rol == 'COACH' and reserva.clase.coach_id != request.user.pk:
-                raise PermissionDenied('Solo puedes registrar asistencia en tus propias clases.')
+            if (
+                request.user.rol == "COACH"
+                and reserva.clase.coach_id != request.user.pk
+            ):
+                raise PermissionDenied(
+                    "Solo puedes registrar asistencia en tus propias clases."
+                )
 
             if reserva.estado != Reserva.Estado.CONFIRMADA:
-                raise ValidationError('Solo se registra asistencia en reservas confirmadas.')
+                raise ValidationError(
+                    "Solo se registra asistencia en reservas confirmadas."
+                )
 
             if reserva.asistencia != Reserva.Asistencia.PENDIENTE:
-                raise ValidationError('La asistencia ya fue registrada. No se puede aplicar dos veces.')
+                raise ValidationError(
+                    "La asistencia ya fue registrada. No se puede aplicar dos veces."
+                )
 
             fin_clase = timezone.make_aware(
-                datetime.combine(reserva.clase.fecha, reserva.clase.hora_fin),
+                datetime.combine(
+                    reserva.clase.fecha,
+                    reserva.clase.hora_fin
+                ),
                 timezone.get_current_timezone()
             )
-            if timezone.now() < fin_clase:
-                raise ValidationError('La asistencia se registra una vez finalizada la clase.')
 
-            if asistencia == Reserva.Asistencia.NO_ASISTIO and reserva.membresia_id:
-                membresia = Membresia.objects.select_for_update().get(pk=reserva.membresia_id)
-                if membresia.vigente and membresia.clases_restantes < membresia.clases_totales:
+            if timezone.now() < fin_clase:
+                raise ValidationError(
+                    "La asistencia se registra una vez finalizada la clase."
+                )
+
+            if (
+                asistencia == Reserva.Asistencia.NO_ASISTIO
+                and reserva.membresia_id
+            ):
+                membresia = (
+                    Membresia.objects
+                    .select_for_update()
+                    .get(pk=reserva.membresia_id)
+                )
+
+                if (
+                    membresia.vigente
+                    and membresia.clases_restantes < membresia.clases_totales
+                ):
                     membresia.clases_restantes += 1
-                    membresia.save(update_fields=['clases_restantes'])
+                    membresia.save(
+                        update_fields=["clases_restantes"]
+                    )
                     reserva.clase_devuelta = True
 
             reserva.asistencia = asistencia
             reserva.fecha_registro_asistencia = timezone.now()
             reserva.registrado_por = request.user
-            reserva.save(update_fields=[
-                'asistencia', 'fecha_registro_asistencia', 'registrado_por', 'clase_devuelta'
-            ])
 
-        return Response(ReservaSerializer(reserva).data)
+            reserva.save(
+                update_fields=[
+                    "asistencia",
+                    "fecha_registro_asistencia",
+                    "registrado_por",
+                    "clase_devuelta"
+                ]
+            )
+
+        return Response(
+            ReservaSerializer(reserva).data
+        )

@@ -67,9 +67,9 @@ class MiPerfilSerializer(serializers.ModelSerializer):
                 "Debes seleccionar una fotografía."
             )
 
-        if value.size > 5 * 1024 * 1024:
+        if value.size > 10 * 1024 * 1024:
             raise serializers.ValidationError(
-                "La fotografía no puede superar los 5 MB."
+                "La fotografía no puede superar los 10 MB."
             )
 
         from PIL import Image, UnidentifiedImageError

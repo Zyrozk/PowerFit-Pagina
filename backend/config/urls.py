@@ -24,6 +24,7 @@ urlpatterns = [
     path("api/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/clases/", include("clases.urls")),
     path("api/membresias/", include("membresias.urls")),
+    path("api/estadisticas/", include("estadisticas.urls")),
 ]
 
 if settings.DEBUG:

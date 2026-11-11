@@ -5,12 +5,14 @@ from .models import Membresia, Reserva
 
 class MembresiaSerializer(serializers.ModelSerializer):
     vigente = serializers.BooleanField(read_only=True)
+    nombre_socio = serializers.SerializerMethodField()
 
     class Meta:
         model = Membresia
         fields = [
             'id',
             'socio',
+            'nombre_socio',
             'pago',
             'plan',
             'estado',
@@ -22,6 +24,15 @@ class MembresiaSerializer(serializers.ModelSerializer):
             'vigente'
         ]
         read_only_fields = fields
+
+    def get_nombre_socio(self, obj):
+        socio = obj.socio
+        nombre = socio.get_full_name().strip()
+
+        if nombre:
+            return nombre
+
+        return socio.username
 
 
 class ReservaSerializer(serializers.ModelSerializer):

@@ -9,10 +9,13 @@ class Pago(models.Model):
         MEMBRESIA = "MEMBRESIA", "Membresía"
         CLASE_PARTICULAR = "CLASE_PARTICULAR", "Clase particular"
 
+
     class MetodoPago(models.TextChoices):
         TRANSFERENCIA = "TRANSFERENCIA", "Transferencia bancaria"
         EFECTIVO = "EFECTIVO", "Efectivo"
         TARJETA = "TARJETA", "Tarjeta"
+        EFECTIVO_TARJETA = "EFECTIVO_TARJETA", "Efectivo/Tarjeta"
+
 
     class EstadoPago(models.TextChoices):
         PENDIENTE = "PENDIENTE", "Pendiente"

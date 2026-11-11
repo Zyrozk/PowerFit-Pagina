@@ -592,3 +592,44 @@ class MiFichaSaludView(APIView):
             {"tiene_ficha": True, **serializer.data},
             status=status.HTTP_200_OK
         )
+
+
+class FichaSaludSocioDuenaView(APIView):
+    permission_classes = [
+        permissions.IsAuthenticated,
+        EsDuena,
+    ]
+
+    def get(self, request, socio_id):
+        socio = Usuario.objects.filter(
+            id=socio_id,
+            rol=Usuario.Rol.SOCIO
+        ).first()
+
+        if socio is None:
+            raise NotFound("No se encontró el socio.")
+
+        ficha = FichaSalud.objects.filter(
+            socio=socio
+        ).first()
+
+        if ficha is None:
+            return Response(
+                {
+                    "socio_id": socio.id,
+                    "tiene_ficha": False
+                },
+                status=status.HTTP_200_OK
+            )
+
+        datos = FichaSaludSerializer(ficha).data
+
+        return Response(
+            {
+                "socio_id": socio.id,
+                "tiene_ficha": True,
+                **datos
+            },
+            status=status.HTTP_200_OK
+        )
+

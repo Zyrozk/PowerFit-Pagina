@@ -17,6 +17,7 @@ from .views import (
     CambiarContrasenaView,
     RegistroIMCView,
     MiFichaSaludView,
+    FichaSaludSocioDuenaView,
 )
 
 urlpatterns = [
@@ -89,4 +90,10 @@ urlpatterns = [
         MiFichaSaludView.as_view(),
         name="mi-ficha-salud"
     ),
+    path(
+        "socios/<int:socio_id>/ficha-salud/",
+        FichaSaludSocioDuenaView.as_view(),
+        name="ficha-salud-socio-duena"
+    ),
+
 ]
