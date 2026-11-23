@@ -1,5 +1,6 @@
 
 import secrets
+import uuid
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 
@@ -11,48 +12,148 @@ from django.utils import timezone
 def sumar_mes(fecha):
     anio = fecha.year + (fecha.month // 12)
     mes = (fecha.month % 12) + 1
-    return date(anio, mes, min(fecha.day, monthrange(anio, mes)[1]))
+
+    return date(
+        anio,
+        mes,
+        min(fecha.day, monthrange(anio, mes)[1])
+    )
 
 
 def generar_token_qr():
     return secrets.token_urlsafe(32)
 
 
+def generar_codigo_plan():
+    return f"PLAN_{uuid.uuid4().hex[:12].upper()}"
+
+
+class PlanMembresia(models.Model):
+    codigo = models.CharField(
+        max_length=50,
+        unique=True,
+        editable=False,
+        default=generar_codigo_plan
+    )
+
+    nombre = models.CharField(
+        max_length=100
+    )
+
+    precio_clp = models.PositiveIntegerField()
+
+    clases = models.PositiveSmallIntegerField()
+
+    fecha_creacion = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    fecha_actualizacion = models.DateTimeField(
+        auto_now=True
+    )
+
+    class Meta:
+        ordering = ["id"]
+        verbose_name = "Plan de membresía"
+        verbose_name_plural = "Planes de membresía"
+
+    def __str__(self):
+        return (
+            f"{self.nombre} - "
+            f"{self.clases} clases - "
+            f"${self.precio_clp}"
+        )
+
+
+class ConfiguracionPrecio(models.Model):
+    clave = models.CharField(
+        max_length=50,
+        unique=True
+    )
+
+    precio_clp = models.PositiveIntegerField()
+
+    fecha_actualizacion = models.DateTimeField(
+        auto_now=True
+    )
+
+    class Meta:
+        verbose_name = "Configuración de precio"
+        verbose_name_plural = "Configuraciones de precios"
+
+    def __str__(self):
+        return f"{self.clave}: ${self.precio_clp}"
+
+
 class Membresia(models.Model):
+
     class Plan(models.TextChoices):
-        PLAN_1 = 'PLAN_1', 'Plan 1'
-        PLAN_2 = 'PLAN_2', 'Plan 2'
-        PLAN_3 = 'PLAN_3', 'Plan 3'
+        PLAN_1 = "PLAN_1", "Plan 1"
+        PLAN_2 = "PLAN_2", "Plan 2"
+        PLAN_3 = "PLAN_3", "Plan 3"
 
     class Estado(models.TextChoices):
-        PENDIENTE = 'PENDIENTE', 'Pendiente'
-        ACTIVA = 'ACTIVA', 'Activa'
-        RECHAZADA = 'RECHAZADA', 'Rechazada'
+        PENDIENTE = "PENDIENTE", "Pendiente"
+        ACTIVA = "ACTIVA", "Activa"
+        RECHAZADA = "RECHAZADA", "Rechazada"
 
-    PRECIOS = {'PLAN_1': 30000, 'PLAN_2': 45000, 'PLAN_3': 65000}
-    CUPOS = {'PLAN_1': 10, 'PLAN_2': 15, 'PLAN_3': 24}
+    PRECIOS = {
+        "PLAN_1": 30000,
+        "PLAN_2": 45000,
+        "PLAN_3": 65000
+    }
+
+    CUPOS = {
+        "PLAN_1": 10,
+        "PLAN_2": 15,
+        "PLAN_3": 24
+    }
 
     socio = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
-        related_name='membresias'
+        related_name="membresias"
     )
+
     pago = models.OneToOneField(
-        'pagos.Pago',
+        "pagos.Pago",
         on_delete=models.PROTECT,
-        related_name='membresia'
+        related_name="membresia"
     )
-    plan = models.CharField(max_length=10, choices=Plan.choices)
+
+    plan = models.CharField(
+        max_length=50
+    )
+
+    nombre_plan = models.CharField(
+        max_length=100,
+        blank=True,
+        default=""
+    )
+
     estado = models.CharField(
         max_length=10,
         choices=Estado.choices,
         default=Estado.PENDIENTE
     )
+
     clases_totales = models.PositiveSmallIntegerField()
+
     clases_restantes = models.PositiveSmallIntegerField()
-    fecha_solicitud = models.DateTimeField(auto_now_add=True)
-    fecha_aprobacion = models.DateTimeField(null=True, blank=True)
-    fecha_vencimiento = models.DateField(null=True, blank=True)
+
+    fecha_solicitud = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    fecha_aprobacion = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    fecha_vencimiento = models.DateField(
+        null=True,
+        blank=True
+    )
 
     @property
     def vigente(self):
@@ -62,99 +163,143 @@ class Membresia(models.Model):
             and timezone.localdate() < self.fecha_vencimiento
         )
 
+    @property
+    def nombre_plan_mostrado(self):
+        if self.nombre_plan:
+            return self.nombre_plan
+
+        nombres_originales = {
+            "PLAN_1": "Plan 1",
+            "PLAN_2": "Plan 2",
+            "PLAN_3": "Plan 3"
+        }
+
+        return nombres_originales.get(
+            self.plan,
+            self.plan
+        )
+
 
 class Reserva(models.Model):
+
     class Estado(models.TextChoices):
-        CONFIRMADA = 'CONFIRMADA', 'Confirmada'
-        CANCELADA = 'CANCELADA', 'Cancelada'
-        PENDIENTE = 'PENDIENTE', 'Pendiente de pago'
+        CONFIRMADA = "CONFIRMADA", "Confirmada"
+        CANCELADA = "CANCELADA", "Cancelada"
+        PENDIENTE = "PENDIENTE", "Pendiente de pago"
 
     class Asistencia(models.TextChoices):
-        PENDIENTE = 'PENDIENTE', 'Pendiente'
-        ASISTIO = 'ASISTIO', 'Asistió'
-        NO_ASISTIO = 'NO_ASISTIO', 'No asistió'
+        PENDIENTE = "PENDIENTE", "Pendiente"
+        ASISTIO = "ASISTIO", "Asistió"
+        NO_ASISTIO = "NO_ASISTIO", "No asistió"
 
     asistencia = models.CharField(
         max_length=12,
         choices=Asistencia.choices,
         default=Asistencia.PENDIENTE
     )
+
     fecha_registro_asistencia = models.DateTimeField(
         null=True,
         blank=True
     )
+
     registrado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         null=True,
         blank=True,
-        related_name='asistencias_registradas'
+        related_name="asistencias_registradas"
     )
-    clase_devuelta = models.BooleanField(default=False)
+
+    clase_devuelta = models.BooleanField(
+        default=False
+    )
 
     socio = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
-        related_name='reservas'
+        related_name="reservas"
     )
+
     clase = models.ForeignKey(
-        'clases.Clase',
+        "clases.Clase",
         on_delete=models.PROTECT,
-        related_name='reservas'
+        related_name="reservas"
     )
+
     membresia = models.ForeignKey(
         Membresia,
         on_delete=models.PROTECT,
         null=True,
         blank=True,
-        related_name='reservas'
+        related_name="reservas"
     )
+
     pago = models.OneToOneField(
-        'pagos.Pago',
+        "pagos.Pago",
         on_delete=models.PROTECT,
         null=True,
         blank=True,
-        related_name='reserva'
+        related_name="reserva"
     )
+
     estado = models.CharField(
         max_length=10,
         choices=Estado.choices,
         default=Estado.CONFIRMADA
     )
-    fecha_creacion = models.DateTimeField(auto_now_add=True)
+
+    fecha_creacion = models.DateTimeField(
+        auto_now_add=True
+    )
 
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=['socio', 'clase'],
+                fields=["socio", "clase"],
                 condition=models.Q(
-                    estado__in=['CONFIRMADA', 'PENDIENTE']
+                    estado__in=[
+                        "CONFIRMADA",
+                        "PENDIENTE"
+                    ]
                 ),
-                name='reserva_unica_socio_clase_activa'
+                name="reserva_unica_socio_clase_activa"
             )
         ]
 
 
 class SesionQRAsistencia(models.Model):
+
     clase = models.OneToOneField(
-        'clases.Clase',
+        "clases.Clase",
         on_delete=models.CASCADE,
-        related_name='sesion_qr_asistencia'
+        related_name="sesion_qr_asistencia"
     )
+
     token = models.CharField(
         max_length=64,
         unique=True,
         default=generar_token_qr,
         editable=False
     )
-    habilitada = models.BooleanField(default=True)
+
+    habilitada = models.BooleanField(
+        default=True
+    )
+
     generada_por = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
-        related_name='sesiones_qr_generadas'
+        related_name="sesiones_qr_generadas"
     )
-    fecha_creacion = models.DateTimeField(auto_now_add=True)
-    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    fecha_creacion = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    fecha_actualizacion = models.DateTimeField(
+        auto_now=True
+    )
 
     @property
     def inicio_validez(self):
@@ -162,10 +307,12 @@ class SesionQRAsistencia(models.Model):
             self.clase.fecha,
             self.clase.hora_inicio
         )
+
         inicio = timezone.make_aware(
             inicio,
             timezone.get_current_timezone()
         )
+
         return inicio - timedelta(hours=1)
 
     @property
@@ -174,15 +321,18 @@ class SesionQRAsistencia(models.Model):
             self.clase.fecha,
             self.clase.hora_fin
         )
+
         fin = timezone.make_aware(
             fin,
             timezone.get_current_timezone()
         )
+
         return fin + timedelta(hours=1)
 
     @property
     def vigente(self):
         ahora = timezone.now()
+
         return (
             self.habilitada
             and self.clase.activa
@@ -190,41 +340,54 @@ class SesionQRAsistencia(models.Model):
         )
 
     def __str__(self):
-        return f'QR de clase {self.clase_id}'
+        return f"QR de clase {self.clase_id}"
 
 
 class CambioExcepcionalAsistencia(models.Model):
+
     reserva = models.ForeignKey(
         Reserva,
         on_delete=models.PROTECT,
-        related_name='cambios_excepcionales'
+        related_name="cambios_excepcionales"
     )
+
     asistencia_anterior = models.CharField(
         max_length=12,
         choices=Reserva.Asistencia.choices
     )
+
     asistencia_nueva = models.CharField(
         max_length=12,
         choices=Reserva.Asistencia.choices
     )
+
     motivo = models.TextField()
+
     realizado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
-        related_name='cambios_excepcionales_realizados'
+        related_name="cambios_excepcionales_realizados"
     )
-    fecha_cambio = models.DateTimeField(auto_now_add=True)
+
+    fecha_cambio = models.DateTimeField(
+        auto_now_add=True
+    )
+
     clases_restantes_antes = models.PositiveSmallIntegerField(
         null=True,
         blank=True
     )
+
     clases_restantes_despues = models.PositiveSmallIntegerField(
         null=True,
         blank=True
     )
 
     class Meta:
-        ordering = ['-fecha_cambio']
+        ordering = ["-fecha_cambio"]
 
     def __str__(self):
-        return f'Cambio excepcional de reserva {self.reserva_id}'
+        return (
+            f"Cambio excepcional de reserva "
+            f"{self.reserva_id}"
+        )

@@ -5,6 +5,45 @@ from django.db import transaction
 from .models import Notificacion
 
 
+def notificar_coach(
+    coach,
+    tipo,
+    titulo,
+    descripcion,
+    clave_evento
+):
+    if coach is None:
+        return
+
+    coach_id = getattr(coach, "pk", None)
+
+    if coach_id is None:
+        return
+
+    Usuario = get_user_model()
+
+    def crear_notificacion():
+        usuario_coach = Usuario.objects.filter(
+            pk=coach_id,
+            rol="COACH",
+            is_active=True
+        ).first()
+
+        if usuario_coach is None:
+            return
+
+        Notificacion.objects.get_or_create(
+            clave_evento=f"{clave_evento}:coach:{usuario_coach.pk}",
+            defaults={
+                "socio": usuario_coach,
+                "tipo": tipo,
+                "titulo": titulo,
+                "descripcion": descripcion
+            }
+        )
+
+    transaction.on_commit(crear_notificacion)
+
 def notificar_duenas(tipo, titulo, descripcion, clave_evento):
     Usuario = get_user_model()
 

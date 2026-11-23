@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import Usuario, RegistroFacial, RegistroIMC, FichaSalud
 from django.contrib.auth.password_validation import validate_password
+from clases.models import TipoClase
 
 
 class UsuarioSerializer(serializers.ModelSerializer):
@@ -139,6 +140,7 @@ class RegistroFacialSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+
 class GestionCoachSerializer(serializers.ModelSerializer):
     password = serializers.CharField(
         write_only=True,
@@ -161,15 +163,56 @@ class GestionCoachSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id"]
 
+    def validate_especialidades(self, value):
+        if not isinstance(value, list):
+            raise serializers.ValidationError(
+                "Las especialidades deben ser una lista."
+            )
+
+        if any(
+            not isinstance(codigo, str) or not codigo.strip()
+            for codigo in value
+        ):
+            raise serializers.ValidationError(
+                "Todas las especialidades deben tener un código válido."
+            )
+
+        if len(value) != len(set(value)):
+            raise serializers.ValidationError(
+                "No se permiten especialidades repetidas."
+            )
+
+        tipos_activos = set(
+            TipoClase.objects.filter(
+                activa=True,
+                codigo__in=value
+            ).values_list("codigo", flat=True)
+        )
+
+        invalidas = [
+            codigo
+            for codigo in value
+            if codigo not in tipos_activos
+        ]
+
+        if invalidas:
+            raise serializers.ValidationError(
+                "Una o más especialidades no existen o están desactivadas."
+            )
+
+        return value
+
     def validate(self, attrs):
         if self.instance is None and not attrs.get("password"):
             raise serializers.ValidationError({
                 "password": "La contraseña es obligatoria."
             })
+
         return attrs
 
     def create(self, validated_data):
         password = validated_data.pop("password")
+
         return Usuario.objects.create_user(
             password=password,
             rol=Usuario.Rol.COACH,
@@ -188,35 +231,6 @@ class GestionCoachSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
-        def validate_especialidades(self, value):
-            permitidas = {
-                "BAILE_ENTRETENIDO",
-                "LOCALIZADO",
-                "STEP",
-                "SALSA_FIT",
-                "BACHATA",
-                "SALSA",
-            }
-
-        if not isinstance(value, list):
-            raise serializers.ValidationError(
-                "Las especialidades deben ser una lista."
-            )
-
-        if any(
-            not isinstance(item, str) or item not in permitidas
-            for item in value
-        ):
-            raise serializers.ValidationError(
-                "Se encontraron especialidades no válidas."
-            )
-
-        if len(value) != len(set(value)):
-            raise serializers.ValidationError(
-                "No se permiten especialidades repetidas."
-            )
-
-        return value
 
 
 class GestionSocioSerializer(serializers.ModelSerializer):

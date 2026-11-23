@@ -13,7 +13,7 @@ from PIL import Image, UnidentifiedImageError
 
 from clases.models import Clase
 from pagos.models import Pago
-from .models import Membresia, Reserva, sumar_mes
+from .models import (Membresia, Reserva, PlanMembresia, ConfiguracionPrecio, sumar_mes)
 from .serializers import MembresiaSerializer, ReservaSerializer
 from notificaciones.services import (
     notificar_solicitud_membresia,
@@ -128,24 +128,36 @@ def validar_clase(clase):
         raise ValidationError("No quedan cupos disponibles.")
 
 
+
 class PlanesView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        return Response([
+        planes = [
             {
-                "codigo": p,
-                "nombre": nombre,
-                "clases": Membresia.CUPOS[p],
-                "precio_clp": Membresia.PRECIOS[p]
+                "codigo": plan.codigo,
+                "nombre": plan.nombre,
+                "clases": plan.clases,
+                "precio_clp": plan.precio_clp
             }
-            for p, nombre in Membresia.Plan.choices
-        ] + [{
+            for plan in PlanMembresia.objects.all().order_by("id")
+        ]
+
+        precio_particular, _ = (
+            ConfiguracionPrecio.objects.get_or_create(
+                clave="CLASE_PARTICULAR",
+                defaults={"precio_clp": 3500}
+            )
+        )
+
+        planes.append({
             "codigo": "CLASE_PARTICULAR",
             "nombre": "Clase particular",
             "clases": 1,
-            "precio_clp": 3500
-        }])
+            "precio_clp": precio_particular.precio_clp
+        })
+
+        return Response(planes)
 
 
 class MembresiasView(generics.ListAPIView):
@@ -177,7 +189,10 @@ class ComprarPlanView(APIView):
         metodo = request.data.get("metodo_pago")
         comprobante = request.FILES.get("comprobante")
 
-        if plan not in Membresia.PRECIOS:
+        
+        if not PlanMembresia.objects.filter(
+            codigo=plan
+        ).exists():
             raise ValidationError({
                 "plan": "Plan inválido."
             })
@@ -240,11 +255,18 @@ class ComprarPlanView(APIView):
             })
 
         with transaction.atomic():
+            
+            plan_configurado = (
+                PlanMembresia.objects
+                .select_for_update()
+                .get(codigo=plan)
+            )
+
             pago = Pago.objects.create(
                 socio=request.user,
                 tipo_pago=Pago.TipoPago.MEMBRESIA,
                 metodo_pago=metodo,
-                monto=Membresia.PRECIOS[plan],
+                monto=plan_configurado.precio_clp,
                 estado=Pago.EstadoPago.PENDIENTE,
                 comprobante=comprobante
             )
@@ -252,10 +274,12 @@ class ComprarPlanView(APIView):
             membresia = Membresia.objects.create(
                 socio=request.user,
                 pago=pago,
-                plan=plan,
-                clases_totales=Membresia.CUPOS[plan],
-                clases_restantes=Membresia.CUPOS[plan]
+                plan=plan_configurado.codigo,
+                nombre_plan=plan_configurado.nombre,
+                clases_totales=plan_configurado.clases,
+                clases_restantes=plan_configurado.clases
             )
+
 
             notificar_solicitud_membresia(membresia)
 
@@ -518,11 +542,24 @@ class ReservarClaseView(APIView):
                     )
 
                 else:
+                    configuracion_precio, _ = (
+                        ConfiguracionPrecio.objects.get_or_create(
+                            clave="CLASE_PARTICULAR",
+                            defaults={"precio_clp": 3500}
+                        )
+                    )
+
+                    configuracion_precio = (
+                        ConfiguracionPrecio.objects
+                        .select_for_update()
+                        .get(pk=configuracion_precio.pk)
+                    )
+
                     pago = Pago.objects.create(
                         socio=request.user,
                         tipo_pago=Pago.TipoPago.CLASE_PARTICULAR,
                         metodo_pago=metodo,
-                        monto=3500,
+                        monto=configuracion_precio.precio_clp,
                         estado=Pago.EstadoPago.PENDIENTE,
                         comprobante=comprobante
                     )

@@ -12,6 +12,12 @@ from .views import (
     RegistrarAsistenciaView,
 )
 
+from .views_configuracion import (
+    PlanesConfigurablesView,
+    PlanConfigurableDetalleView,
+    PrecioParticularView,
+)
+
 from .views_qr import (
     SesionQRClaseView,
     DeshabilitarQRClaseView,
@@ -19,65 +25,81 @@ from .views_qr import (
     CambioExcepcionalAsistenciaView,
 )
 
+
 urlpatterns = [
     path(
-        'planes/',
+        "planes/",
         PlanesView.as_view(),
-        name='planes'
+        name="planes"
     ),
     path(
-        '',
+        "planes/configuracion/",
+        PlanesConfigurablesView.as_view(),
+        name="planes-configuracion"
+    ),
+    path(
+        "planes/configuracion/<int:pk>/",
+        PlanConfigurableDetalleView.as_view(),
+        name="plan-configuracion-detalle"
+    ),
+    path(
+        "precios/clase-particular/",
+        PrecioParticularView.as_view(),
+        name="precio-clase-particular"
+    ),
+    path(
+        "",
         MembresiasView.as_view(),
-        name='membresias'
+        name="membresias"
     ),
     path(
-        'comprar/',
+        "comprar/",
         ComprarPlanView.as_view(),
-        name='comprar-plan'
+        name="comprar-plan"
     ),
     path(
-        '<int:pk>/resolver/',
+        "<int:pk>/resolver/",
         ResolverMembresiaView.as_view(),
-        name='resolver-membresia'
+        name="resolver-membresia"
     ),
     path(
-        'reservas/',
+        "reservas/",
         ReservasView.as_view(),
-        name='reservas'
+        name="reservas"
     ),
     path(
-        'reservas/crear/',
+        "reservas/crear/",
         ReservarClaseView.as_view(),
-        name='reservar-clase'
+        name="reservar-clase"
     ),
     path(
-        'reservas/<int:pk>/resolver/',
+        "reservas/<int:pk>/resolver/",
         ResolverReservaParticularView.as_view(),
-        name='resolver-reserva'
+        name="resolver-reserva"
     ),
     path(
-        'reservas/<int:pk>/asistencia/',
+        "reservas/<int:pk>/asistencia/",
         RegistrarAsistenciaView.as_view(),
-        name='registrar-asistencia'
+        name="registrar-asistencia"
     ),
     path(
-        'clases/<int:clase_id>/qr/',
+        "clases/<int:clase_id>/qr/",
         SesionQRClaseView.as_view(),
-        name='sesion-qr-clase'
+        name="sesion-qr-clase"
     ),
     path(
-        'clases/<int:clase_id>/qr/deshabilitar/',
+        "clases/<int:clase_id>/qr/deshabilitar/",
         DeshabilitarQRClaseView.as_view(),
-        name='deshabilitar-qr-clase'
+        name="deshabilitar-qr-clase"
     ),
     path(
-        'qr/escanear/',
+        "qr/escanear/",
         EscanearQRAsistenciaView.as_view(),
-        name='escanear-qr-asistencia'
+        name="escanear-qr-asistencia"
     ),
     path(
-        'reservas/<int:reserva_id>/cambio-excepcional/',
+        "reservas/<int:reserva_id>/cambio-excepcional/",
         CambioExcepcionalAsistenciaView.as_view(),
-        name='cambio-excepcional-asistencia'
+        name="cambio-excepcional-asistencia"
     ),
 ]

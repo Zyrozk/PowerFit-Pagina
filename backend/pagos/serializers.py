@@ -79,7 +79,7 @@ class PagoDuenaSerializer(serializers.ModelSerializer):
         if obj.tipo_pago == Pago.TipoPago.MEMBRESIA:
             membresia = Membresia.objects.filter(pago=obj).first()
             if membresia:
-                return membresia.get_plan_display()
+                return membresia.nombre_plan_mostrado
             return "Membresía"
 
         return "Clase particular"
