@@ -19,9 +19,7 @@ class NotificacionesView(APIView):
         )
 
     def get(self, request):
-        qs = self.get_queryset(request)
-
-        if request.user.rol == 'SOCIO':
+        if request.user.rol == "SOCIO":
             hoy = timezone.localdate()
             limite = hoy + timedelta(days=3)
 
@@ -34,35 +32,60 @@ class NotificacionesView(APIView):
 
             for membresia in membresias:
                 Notificacion.objects.get_or_create(
-                    clave_evento=f'vence:{membresia.pk}',
+                    clave_evento=f"vence:{membresia.pk}",
                     defaults={
-                        'socio': request.user,
-                        'tipo': 'MEMBRESIA_POR_VENCER',
-                        'titulo': 'Tu membresía está por vencer',
-                        'descripcion': (
-                            f'Tu {membresia.get_plan_display()} '
-                            f'vence el '
-                            f'{membresia.fecha_vencimiento:%d/%m/%Y}.'
+                        "socio": request.user,
+                        "tipo": "MEMBRESIA_POR_VENCER",
+                        "titulo": "Tu membresía está por vencer",
+                        "descripcion": (
+                            f"Tu {membresia.nombre_plan_mostrado} "
+                            f"vence el "
+                            f"{membresia.fecha_vencimiento:%d/%m/%Y}."
                         ),
-                        'membresia_id_referencia': membresia.pk
+                        "membresia_id_referencia": membresia.pk
                     }
                 )
 
         notificaciones = self.get_queryset(request)
 
-        return Response([
-            {
-                'id': notificacion.id,
-                'tipo': notificacion.tipo,
-                'titulo': notificacion.titulo,
-                'descripcion': notificacion.descripcion,
-                'membresia_id': notificacion.membresia_id_referencia,
-                'motivo_rechazo': notificacion.motivo_rechazo,
-                'creada': notificacion.creada.isoformat(),
-                'nueva': not notificacion.leida
-            }
-            for notificacion in notificaciones
-        ])
+        respuesta = []
+
+        for notificacion in notificaciones:
+            motivo_rechazo = notificacion.motivo_rechazo
+
+            if (
+                notificacion.tipo == "MEMBRESIA_RECHAZADA"
+                and not motivo_rechazo
+                and notificacion.membresia_id_referencia
+            ):
+                membresia = (
+                    Membresia.objects
+                    .select_related("pago")
+                    .filter(
+                        pk=notificacion.membresia_id_referencia,
+                        socio=request.user,
+                        estado=Membresia.Estado.RECHAZADA
+                    )
+                    .first()
+                )
+
+                if membresia:
+                    motivo_rechazo = (
+                        membresia.pago.motivo_rechazo or ""
+                    )
+
+            respuesta.append({
+                "id": notificacion.id,
+                "tipo": notificacion.tipo,
+                "titulo": notificacion.titulo,
+                "descripcion": notificacion.descripcion,
+                "membresia_id": notificacion.membresia_id_referencia,
+                "motivo_rechazo": motivo_rechazo,
+                "creada": notificacion.creada.isoformat(),
+                "nueva": not notificacion.leida
+            })
+
+        return Response(respuesta)
 
     def delete(self, request):
         self.get_queryset(request).delete()

@@ -44,6 +44,7 @@ def notificar_coach(
 
     transaction.on_commit(crear_notificacion)
 
+
 def notificar_duenas(tipo, titulo, descripcion, clave_evento):
     Usuario = get_user_model()
 
@@ -141,7 +142,7 @@ def notificar_reserva_particular(reserva):
 
 
 def notificar_resultado_membresia(membresia, aprobada, motivo=""):
-    nombre_plan = membresia.get_plan_display()
+    nombre_plan = membresia.nombre_plan_mostrado
 
     if aprobada:
         notificar_socio(
