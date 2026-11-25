@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import API_URL from "../services/api";
+import API_URL, { apiFetch } from "../services/api";
 
 function HistorialPagos({ accessToken, volver }) {
   const [pagos, setPagos] = useState([]);

@@ -391,3 +391,165 @@ class CambioExcepcionalAsistencia(models.Model):
             f"Cambio excepcional de reserva "
             f"{self.reserva_id}"
         )
+
+class SesionAsistenciaFacial(models.Model):
+
+    clase = models.OneToOneField(
+        "clases.Clase",
+        on_delete=models.CASCADE,
+        related_name="sesion_asistencia_facial"
+    )
+
+    habilitada = models.BooleanField(
+        default=False
+    )
+
+    habilitada_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="sesiones_faciales_habilitadas",
+        null=True,
+        blank=True
+    )
+
+    fecha_habilitacion = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    fecha_desactivacion = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    fecha_creacion = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    fecha_actualizacion = models.DateTimeField(
+        auto_now=True
+    )
+
+    @property
+    def inicio_validez(self):
+        inicio = datetime.combine(
+            self.clase.fecha,
+            self.clase.hora_inicio
+        )
+
+        inicio = timezone.make_aware(
+            inicio,
+            timezone.get_current_timezone()
+        )
+
+        return inicio - timedelta(hours=1)
+
+    @property
+    def fin_validez(self):
+        fin = datetime.combine(
+            self.clase.fecha,
+            self.clase.hora_fin
+        )
+
+        fin = timezone.make_aware(
+            fin,
+            timezone.get_current_timezone()
+        )
+
+        return fin + timedelta(hours=1)
+
+    @property
+    def vigente(self):
+        ahora = timezone.now()
+
+        return (
+            self.habilitada
+            and self.clase.activa
+            and self.inicio_validez <= ahora <= self.fin_validez
+        )
+
+    def __str__(self):
+        return f"Asistencia facial de clase {self.clase_id}"
+
+class DesafioPruebaVida(models.Model):
+
+    class Direccion(models.TextChoices):
+
+        IZQUIERDA = (
+            "IZQUIERDA_IMAGEN",
+            "Izquierda de la imagen"
+        )
+
+        DERECHA = (
+            "DERECHA_IMAGEN",
+            "Derecha de la imagen"
+        )
+
+    class Estado(models.TextChoices):
+
+        PENDIENTE = "PENDIENTE", "Pendiente"
+        VALIDANDO = "VALIDANDO", "Validando"
+        SUPERADO = "SUPERADO", "Superado"
+        FALLIDO = "FALLIDO", "Fallido"
+        EXPIRADO = "EXPIRADO", "Expirado"
+        CANCELADO = "CANCELADO", "Cancelado"
+
+    reserva = models.ForeignKey(
+        Reserva,
+        on_delete=models.CASCADE,
+        related_name="desafios_prueba_vida"
+    )
+
+    sesion = models.ForeignKey(
+        SesionAsistenciaFacial,
+        on_delete=models.CASCADE,
+        related_name="desafios_prueba_vida"
+    )
+
+    token = models.CharField(
+        max_length=64,
+        unique=True,
+        editable=False
+    )
+
+    direccion = models.CharField(
+        max_length=25,
+        choices=Direccion.choices
+    )
+
+    estado = models.CharField(
+        max_length=15,
+        choices=Estado.choices,
+        default=Estado.PENDIENTE
+    )
+
+    fecha_habilitacion_sesion = models.DateTimeField()
+
+    fecha_creacion = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    fecha_expiracion = models.DateTimeField()
+
+    fecha_resolucion = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    @property
+    def vigente(self):
+
+        return (
+            self.estado == self.Estado.PENDIENTE
+            and timezone.now() < self.fecha_expiracion
+            and self.sesion.vigente
+            and self.sesion.fecha_habilitacion
+            == self.fecha_habilitacion_sesion
+        )
+
+    def __str__(self):
+
+        return (
+            f"Desafío de reserva {self.reserva_id} "
+            f"- {self.estado}"
+        )

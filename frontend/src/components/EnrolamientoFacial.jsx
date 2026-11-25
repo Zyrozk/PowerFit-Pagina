@@ -1,5 +1,6 @@
+
 import { useEffect, useState } from "react";
-import API_URL from "../services/api";
+import API_URL, { apiFetch } from "../services/api";
 import RegistroFacial from "./RegistroFacial";
 
 function EnrolamientoFacial({ accessToken, volver }) {
@@ -9,6 +10,7 @@ function EnrolamientoFacial({ accessToken, volver }) {
   const [socioSeleccionado, setSocioSeleccionado] = useState(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
+  const [actualizacion, setActualizacion] = useState(0);
 
   useEffect(() => {
     const controlador = new AbortController();
@@ -21,7 +23,10 @@ function EnrolamientoFacial({ accessToken, volver }) {
         const parametros = new URLSearchParams();
 
         if (busquedaAplicada.trim()) {
-          parametros.set("buscar", busquedaAplicada.trim());
+          parametros.set(
+            "buscar",
+            busquedaAplicada.trim()
+          );
         }
 
         const consulta = parametros.toString();
@@ -59,11 +64,12 @@ function EnrolamientoFacial({ accessToken, volver }) {
     obtenerSocios();
 
     return () => controlador.abort();
-  }, [accessToken, busquedaAplicada]);
+  }, [accessToken, busquedaAplicada, actualizacion]);
 
   const buscarSocios = (e) => {
     e.preventDefault();
     setBusquedaAplicada(busqueda);
+    setActualizacion((anterior) => anterior + 1);
   };
 
   const limpiarBusqueda = () => {
@@ -77,6 +83,7 @@ function EnrolamientoFacial({ accessToken, volver }) {
 
   const volverASocios = () => {
     setSocioSeleccionado(null);
+    setActualizacion((anterior) => anterior + 1);
   };
 
   if (socioSeleccionado) {
@@ -84,8 +91,8 @@ function EnrolamientoFacial({ accessToken, volver }) {
       <RegistroFacial
         socio={socioSeleccionado}
         accessToken={accessToken}
-        volver={() => setSocioSeleccionado(null)}
-        />
+        volver={volverASocios}
+      />
     );
   }
 
@@ -101,6 +108,7 @@ function EnrolamientoFacial({ accessToken, volver }) {
 
         <div className="panel-bienvenida">
           <h2>Enrolamiento facial</h2>
+
           <p>
             Busca a un socio para consultar el estado de su
             reconocimiento facial.
@@ -121,7 +129,9 @@ function EnrolamientoFacial({ accessToken, volver }) {
               type="text"
               placeholder="Nombre, apellido o usuario"
               value={busqueda}
-              onChange={(e) => setBusqueda(e.target.value)}
+              onChange={(e) =>
+                setBusqueda(e.target.value)
+              }
             />
           </div>
 
@@ -187,7 +197,7 @@ function EnrolamientoFacial({ accessToken, volver }) {
                     onClick={() => seleccionarSocio(socio)}
                   >
                     {socio.reconocimiento_facial_habilitado
-                      ? "Actualizar rostro"
+                      ? "Ver registro facial"
                       : "Registrar rostro"}
                   </button>
                 </div>

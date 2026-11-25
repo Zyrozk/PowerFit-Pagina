@@ -1,5 +1,9 @@
+
 import { useState } from "react";
-import API_URL from "./services/api";
+import API_URL, {
+  configurarSesion,
+  limpiarSesion,
+} from "./services/api";
 import PanelDuena from "./components/PanelDuena";
 import HistorialPagos from "./components/HistorialPagos";
 import EnrolamientoFacial from "./components/EnrolamientoFacial";
@@ -13,30 +17,40 @@ function App() {
   const [sesion, setSesion] = useState(null);
   const [pantalla, setPantalla] = useState("panel");
 
+  const sesionExpirada = () => {
+    limpiarSesion();
+    setSesion(null);
+    setContrasena("");
+    setPantalla("panel");
+    setError(
+      "Tu sesión ha expirado. Inicia sesión nuevamente."
+    );
+  };
+
   const iniciarSesion = async (e) => {
     e.preventDefault();
     setError("");
     setCargando(true);
 
     try {
-      const respuesta = await fetch(`${API_URL}/token/`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email: usuario,
-          password: contrasena,
-        }),
-      });
-      
-      if (!respuesta.ok) {
-        const datosError = await respuesta.json().catch(() => ({}));
+      const respuesta = await fetch(
+        `${API_URL}/token/`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email: usuario,
+            password: contrasena,
+          }),
+        }
+      );
 
-        console.error("Error de autenticación:", {
-          codigo: respuesta.status,
-          detalle: datosError,
-        });
+      if (!respuesta.ok) {
+        const datosError = await respuesta
+          .json()
+          .catch(() => ({}));
 
         throw new Error(
           datosError.detail ||
@@ -48,6 +62,12 @@ function App() {
 
       const tokens = await respuesta.json();
 
+      if (!tokens.access || !tokens.refresh) {
+        throw new Error(
+          "El servidor no entregó los tokens de sesión."
+        );
+      }
+
       const respuestaPerfil = await fetch(
         `${API_URL}/usuarios/mi-perfil/`,
         {
@@ -58,7 +78,9 @@ function App() {
       );
 
       if (!respuestaPerfil.ok) {
-        throw new Error("No se pudo verificar la cuenta.");
+        throw new Error(
+          "No se pudo verificar la cuenta."
+        );
       }
 
       const perfil = await respuestaPerfil.json();
@@ -69,6 +91,8 @@ function App() {
         );
       }
 
+      configurarSesion(tokens, sesionExpirada);
+
       setSesion({
         usuario: perfil,
         accessToken: tokens.access,
@@ -77,6 +101,7 @@ function App() {
       setPantalla("panel");
       setContrasena("");
     } catch (err) {
+      limpiarSesion();
       setError(err.message);
     } finally {
       setCargando(false);
@@ -84,6 +109,7 @@ function App() {
   };
 
   const cerrarSesion = () => {
+    limpiarSesion();
     setSesion(null);
     setUsuario("");
     setContrasena("");
@@ -115,7 +141,9 @@ function App() {
         usuario={sesion.usuario}
         cerrarSesion={cerrarSesion}
         verHistorial={() => setPantalla("historial")}
-        verEnrolamiento={() => setPantalla("enrolamiento")}
+        verEnrolamiento={() =>
+          setPantalla("enrolamiento")
+        }
       />
     );
   }
@@ -141,28 +169,39 @@ function App() {
               type="text"
               placeholder="Ingresa tu usuario"
               value={usuario}
-              onChange={(e) => setUsuario(e.target.value)}
+              onChange={(e) =>
+                setUsuario(e.target.value)
+              }
               autoComplete="username"
               required
             />
           </div>
 
           <div className="campo">
-            <label htmlFor="contrasena">Contraseña</label>
+            <label htmlFor="contrasena">
+              Contraseña
+            </label>
 
             <input
               id="contrasena"
               type="password"
               placeholder="Ingresa tu contraseña"
               value={contrasena}
-              onChange={(e) => setContrasena(e.target.value)}
+              onChange={(e) =>
+                setContrasena(e.target.value)
+              }
               autoComplete="current-password"
               required
             />
           </div>
 
           {error && (
-            <p style={{ color: "#dc3545", fontSize: "14px" }}>
+            <p
+              style={{
+                color: "#dc3545",
+                fontSize: "14px",
+              }}
+            >
               {error}
             </p>
           )}
@@ -172,7 +211,9 @@ function App() {
             className="boton-ingresar"
             disabled={cargando}
           >
-            {cargando ? "Ingresando..." : "Iniciar sesión"}
+            {cargando
+              ? "Ingresando..."
+              : "Iniciar sesión"}
           </button>
         </form>
 

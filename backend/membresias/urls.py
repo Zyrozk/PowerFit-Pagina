@@ -25,6 +25,26 @@ from .views_qr import (
     CambioExcepcionalAsistenciaView,
 )
 
+from .views_asistencia_facial import (
+    SesionAsistenciaFacialView,
+    DeshabilitarAsistenciaFacialView,
+)
+
+from .views_disponibilidad_facial import (
+    DisponibilidadAsistenciaFacialView,
+)
+
+from .views_verificacion_facial import (
+    VerificacionAsistenciaFacialView,
+)
+
+from .views_desafio_facial import (
+    CrearDesafioFacialView,
+)
+
+from .views_validacion_vida import (
+    ValidarPruebaVidaView,
+)
 
 urlpatterns = [
     path(
@@ -101,5 +121,35 @@ urlpatterns = [
         "reservas/<int:reserva_id>/cambio-excepcional/",
         CambioExcepcionalAsistenciaView.as_view(),
         name="cambio-excepcional-asistencia"
+    ),
+    path(
+        "clases/<int:clase_id>/asistencia-facial/",
+        SesionAsistenciaFacialView.as_view(),
+        name="sesion-asistencia-facial"
+    ),
+    path(
+        "clases/<int:clase_id>/asistencia-facial/deshabilitar/",
+        DeshabilitarAsistenciaFacialView.as_view(),
+        name="deshabilitar-asistencia-facial"
+    ),
+    path(
+        "asistencia-facial/disponibilidad/",
+        DisponibilidadAsistenciaFacialView.as_view(),
+        name="disponibilidad-asistencia-facial"
+    ),
+    path(
+        "asistencia-facial/verificar/",
+        VerificacionAsistenciaFacialView.as_view(),
+        name="verificacion-asistencia-facial"
+    ),
+    path(
+        "asistencia-facial/desafio/",
+        CrearDesafioFacialView.as_view(),
+        name="crear-desafio-facial"
+    ),
+    path(
+        "asistencia-facial/validar-vida/",
+        ValidarPruebaVidaView.as_view(),
+        name="validar-prueba-vida"
     ),
 ]

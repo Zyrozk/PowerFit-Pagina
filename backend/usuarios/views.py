@@ -25,7 +25,12 @@ from .serializers import (
     RegistroIMCSerializer,
     FichaSaludSerializer,
 )
-from .servicios_faciales import eliminar_datos_faciales
+from .servicios_faciales import (
+    eliminar_datos_faciales,
+    generar_vector_facial,
+    serializar_vector_facial,
+    guardar_datos_faciales_cifrados,
+)
 
 from django.core.exceptions import ValidationError
 
@@ -355,8 +360,66 @@ class ConsentimientoFacialView(APIView):
         )
 
 
+
 class EnrolamientoFacialView(APIView):
     permission_classes = [EsDuenaParaEnrolamientoFacial]
+
+    parser_classes = [
+        JSONParser,
+        MultiPartParser,
+        FormParser,
+    ]
+
+    def obtener_motivos(self, registro):
+        motivos = []
+
+        if registro is None:
+            motivos.append(
+                "El socio todavía no tiene un registro de consentimiento."
+            )
+            return motivos
+
+        if not registro.consentimiento_otorgado:
+            motivos.append(
+                "El socio no ha autorizado el reconocimiento facial."
+            )
+
+        if not registro.consentimiento_confirmado_por_socio:
+            motivos.append(
+                "El socio no ha confirmado su consentimiento."
+            )
+
+        if not registro.version_consentimiento:
+            motivos.append(
+                "No existe una versión de consentimiento registrada."
+            )
+
+        if registro.fecha_confirmacion_socio is None:
+            motivos.append(
+                "No existe una fecha de confirmación del consentimiento."
+            )
+
+        if registro.fecha_revocacion is not None:
+            if (
+                registro.fecha_confirmacion_socio is None
+                or registro.fecha_confirmacion_socio
+                <= registro.fecha_revocacion
+            ):
+                motivos.append(
+                    "El consentimiento fue revocado."
+                )
+
+        if registro.datos_biometricos_cifrados is not None:
+            motivos.append(
+                "El socio ya tiene datos biométricos almacenados."
+            )
+
+        if registro.activo:
+            motivos.append(
+                "El reconocimiento facial del socio ya está activo."
+            )
+
+        return motivos
 
     def get(self, request):
         socio_id = request.query_params.get("socio_id")
@@ -368,11 +431,10 @@ class EnrolamientoFacialView(APIView):
                         "Acceso autorizado para la dueña "
                         "de PowerFit Copiapó."
                     ),
-                    "enrolamiento_disponible": False,
+                    "enrolamiento_disponible": True,
                     "detalle": (
-                        "El enrolamiento facial todavía no está habilitado. "
-                        "Puedes consultar el estado de un socio "
-                        "enviando el parámetro socio_id."
+                        "Selecciona un socio para consultar "
+                        "las condiciones del enrolamiento facial."
                     ),
                 },
                 status=status.HTTP_200_OK
@@ -380,7 +442,11 @@ class EnrolamientoFacialView(APIView):
 
         if not socio_id.isdecimal():
             return Response(
-                {"error": "El socio_id debe ser un número válido."},
+                {
+                    "error": (
+                        "El socio_id debe ser un número válido."
+                    )
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -391,76 +457,231 @@ class EnrolamientoFacialView(APIView):
         ).first()
 
         if socio is None:
-            raise NotFound("No se encontró un socio activo con ese ID.")
+            raise NotFound(
+                "No se encontró un socio activo con ese ID."
+            )
 
         registro = RegistroFacial.objects.filter(
             socio=socio
         ).first()
 
-        motivos = []
+        motivos = self.obtener_motivos(registro)
 
-        if registro is None:
-            motivos.append(
-                "El socio todavía no tiene un registro de consentimiento."
-            )
-        else:
-            if not registro.consentimiento_otorgado:
-                motivos.append(
-                    "El socio no ha autorizado el reconocimiento facial."
-                )
-
-            if not registro.consentimiento_confirmado_por_socio:
-                motivos.append(
-                    "El socio no ha confirmado su consentimiento."
-                )
-
-            if not registro.version_consentimiento:
-                motivos.append(
-                    "No existe una versión de consentimiento registrada."
-                )
-
-            if registro.fecha_confirmacion_socio is None:
-                motivos.append(
-                    "No existe una fecha de confirmación del consentimiento."
-                )
-
-            if registro.fecha_revocacion is not None:
-                if (
-                    registro.fecha_confirmacion_socio is None
-                    or registro.fecha_confirmacion_socio
-                    <= registro.fecha_revocacion
-                ):
-                    motivos.append(
-                        "El consentimiento fue revocado."
-                    )
-
-            if registro.datos_biometricos_cifrados is not None:
-                motivos.append(
-                    "El socio ya tiene datos biométricos almacenados."
-                )
-
-            if registro.activo:
-                motivos.append(
-                    "El reconocimiento facial del socio ya está activo."
-                )
+        disponible = len(motivos) == 0
 
         return Response(
             {
                 "socio_id": socio.id,
-                "socio": socio.get_full_name() or socio.username,
+                "socio": (
+                    socio.get_full_name()
+                    or socio.username
+                ),
                 "tiene_registro": registro is not None,
-                "consentimiento_valido": len(motivos) == 0,
-                "cumple_condiciones_previas": len(motivos) == 0,
-                "enrolamiento_disponible": False,
+                "consentimiento_valido": disponible,
+                "cumple_condiciones_previas": disponible,
+                "enrolamiento_disponible": disponible,
+                "activo": (
+                    registro.activo
+                    if registro is not None
+                    else False
+                ),
                 "motivos": motivos,
                 "detalle": (
-                    "Esta consulta solo verifica condiciones previas. "
-                    "La captura y el almacenamiento biométrico "
-                    "todavía no están habilitados."
+                    "El socio cumple las condiciones "
+                    "para realizar el enrolamiento facial."
+                    if disponible
+                    else
+                    "El socio no cumple las condiciones "
+                    "para realizar el enrolamiento facial."
                 ),
             },
             status=status.HTTP_200_OK
         )
+
+    def post(self, request):
+        socio_id = request.data.get("socio_id")
+        imagen = request.FILES.get("imagen")
+
+        if (
+            socio_id is None
+            or not str(socio_id).isdecimal()
+        ):
+            return Response(
+                {
+                    "error": (
+                        "Debe proporcionar un socio_id válido."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        socio = Usuario.objects.filter(
+            pk=int(socio_id),
+            rol="SOCIO",
+            is_active=True,
+        ).first()
+
+        if socio is None:
+            raise NotFound(
+                "No se encontró un socio activo con ese ID."
+            )
+
+        registro = RegistroFacial.objects.filter(
+            socio=socio
+        ).first()
+
+        motivos = self.obtener_motivos(registro)
+
+        if motivos:
+            return Response(
+                {
+                    "error": (
+                        "El socio no cumple las condiciones "
+                        "para realizar el enrolamiento facial."
+                    ),
+                    "motivos": motivos,
+                    "enrolamiento_disponible": False,
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if imagen is None:
+            return Response(
+                {
+                    "error": (
+                        "Debe proporcionar una imagen facial."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            vector = generar_vector_facial(imagen)
+            datos_biometricos = serializar_vector_facial(
+                vector
+            )
+
+        except ValueError as error:
+            return Response(
+                {"error": str(error)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with transaction.atomic():
+                registro_actual = (
+                    RegistroFacial.objects
+                    .select_for_update()
+                    .get(pk=registro.pk)
+                )
+
+                socio_actual = (
+                    Usuario.objects
+                    .select_for_update()
+                    .filter(
+                        pk=socio.pk,
+                        rol="SOCIO",
+                        is_active=True,
+                    )
+                    .first()
+                )
+
+                if socio_actual is None:
+                    raise NotFound(
+                        "El socio ya no se encuentra activo."
+                    )
+
+                motivos = self.obtener_motivos(
+                    registro_actual
+                )
+
+                if motivos:
+                    return Response(
+                        {
+                            "error": (
+                                "Las condiciones del enrolamiento "
+                                "facial han cambiado."
+                            ),
+                            "motivos": motivos,
+                            "enrolamiento_disponible": False,
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                registro_actual = (
+                    guardar_datos_faciales_cifrados(
+                        registro_actual,
+                        datos_biometricos
+                    )
+                )
+
+                registro_actual.activo = True
+                registro_actual.fecha_enrolamiento = (
+                    timezone.now()
+                )
+                registro_actual.registrado_por = (
+                    request.user
+                )
+
+                registro_actual.save(
+                    update_fields=[
+                        "activo",
+                        "fecha_enrolamiento",
+                        "registrado_por",
+                        "fecha_actualizacion",
+                    ]
+                )
+
+                socio_actual.reconocimiento_facial_habilitado = True
+
+                socio_actual.save(
+                    update_fields=[
+                        "reconocimiento_facial_habilitado"
+                    ]
+                )
+
+        except RegistroFacial.DoesNotExist:
+            return Response(
+                {
+                    "error": (
+                        "El registro de consentimiento "
+                        "ya no se encuentra disponible."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        except ValueError:
+            return Response(
+                {
+                    "error": (
+                        "No se pudo almacenar el registro facial. "
+                        "Verifica la configuración del servidor."
+                    )
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        return Response(
+            {
+                "mensaje": (
+                    "Enrolamiento facial realizado correctamente."
+                ),
+                "socio_id": socio_actual.id,
+                "socio": (
+                    socio_actual.get_full_name()
+                    or socio_actual.username
+                ),
+                "activo": True,
+                "reconocimiento_facial_habilitado": True,
+                "fecha_enrolamiento": (
+                    registro_actual.fecha_enrolamiento
+                ),
+                "enrolamiento_disponible": False,
+            },
+            status=status.HTTP_201_CREATED
+        )
+
 
 class CambiarContrasenaView(APIView):
     permission_classes = [permissions.IsAuthenticated]
