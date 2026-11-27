@@ -114,19 +114,22 @@ class DeshabilitarQRClaseView(APIView):
     def post(self, request, clase_id):
         with transaction.atomic():
             try:
+                clase = Clase.objects.select_for_update().get(
+                    pk=clase_id
+                )
+            except Clase.DoesNotExist:
+                raise NotFound('Clase no encontrada.')
+
+            verificar_administrador_clase(request.user, clase)
+
+            try:
                 sesion = (
                     SesionQRAsistencia.objects
                     .select_for_update()
-                    .select_related('clase')
                     .get(clase_id=clase_id)
                 )
             except SesionQRAsistencia.DoesNotExist:
                 raise NotFound('Esta clase no tiene una sesión QR.')
-
-            verificar_administrador_clase(
-                request.user,
-                sesion.clase
-            )
 
             sesion.habilitada = False
             sesion.save(update_fields=[
@@ -157,14 +160,34 @@ class EscanearQRAsistenciaView(APIView):
                 'token': 'Debes proporcionar un código QR válido.'
             })
 
+        token = token.strip()
+
         with transaction.atomic():
+            clase_id = (
+                SesionQRAsistencia.objects
+                .filter(token=token)
+                .values_list('clase_id', flat=True)
+                .first()
+            )
+
+            if clase_id is None:
+                raise ValidationError({
+                    'codigo': 'QR_INVALIDO',
+                    'mensaje': 'El código QR no es válido.'
+                })
+
             try:
+                clase = Clase.objects.select_for_update().get(
+                    pk=clase_id
+                )
+
                 sesion = (
                     SesionQRAsistencia.objects
-                    .select_related('clase')
-                    .get(token=token.strip())
+                    .select_for_update()
+                    .get(clase_id=clase.id, token=token)
                 )
-            except SesionQRAsistencia.DoesNotExist:
+
+            except (Clase.DoesNotExist, SesionQRAsistencia.DoesNotExist):
                 raise ValidationError({
                     'codigo': 'QR_INVALIDO',
                     'mensaje': 'El código QR no es válido.'
@@ -182,7 +205,7 @@ class EscanearQRAsistenciaView(APIView):
             try:
                 reserva = (
                     Reserva.objects
-                    .select_for_update()
+                    .select_for_update(of=('self',))
                     .select_related('clase', 'membresia')
                     .get(
                         clase_id=sesion.clase_id,
@@ -215,10 +238,12 @@ class EscanearQRAsistenciaView(APIView):
                 'registrado_por',
             ])
 
+            datos_reserva = ReservaSerializer(reserva).data
+
         return Response({
             'codigo': 'ASISTENCIA_REGISTRADA',
             'mensaje': 'Tu asistencia fue registrada correctamente.',
-            'reserva': ReservaSerializer(reserva).data,
+            'reserva': datos_reserva,
         }, status=status.HTTP_200_OK)
 
 
@@ -251,7 +276,7 @@ class CambioExcepcionalAsistenciaView(APIView):
             try:
                 reserva = (
                     Reserva.objects
-                    .select_for_update()
+                    .select_for_update(of=('self',))
                     .select_related('clase', 'membresia')
                     .get(pk=reserva_id)
                 )

@@ -506,6 +506,14 @@ class DesafioPruebaVida(models.Model):
         related_name="desafios_prueba_vida"
     )
 
+    generado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="desafios_faciales_generados",
+        null=True,
+        blank=True
+    )
+
     token = models.CharField(
         max_length=64,
         unique=True,
