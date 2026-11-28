@@ -1,101 +1,30 @@
-
-from datetime import time, timedelta
+from datetime import timedelta
 from unittest.mock import patch
 
-from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase
 from django.utils import timezone
 
-from rest_framework.test import APIClient
+from membresias import test_asistencia_facial_personal
 
-from clases.models import Clase
-from usuarios.models import RegistroFacial
-
-from .models import Reserva, SesionAsistenciaFacial
-
-
-Usuario = get_user_model()
+from .models import Reserva
 
 
 class DisponibilidadFacialTest(TestCase):
 
+    crear_usuario = (
+        test_asistencia_facial_personal
+        .AsistenciaFacialPersonalTest.crear_usuario
+    )
+
     def setUp(self):
 
-        self.client = APIClient()
-
-        self.ahora = timezone.make_aware(
-            timezone.datetime.combine(
-                timezone.localdate(),
-                time(18, 30)
-            )
+        test_asistencia_facial_personal.AsistenciaFacialPersonalTest.setUp(
+            self
         )
 
-        parche = patch(
-            "django.utils.timezone.now",
-            return_value=self.ahora
-        )
-
-        parche.start()
-        self.addCleanup(parche.stop)
-
-        self.duena = Usuario.objects.create_user(
-            username="duena_facial",
-            email="duena_facial@prueba.cl",
-            password="Prueba123456",
-            rol="DUENA"
-        )
-
-        self.coach = Usuario.objects.create_user(
-            username="coach_facial",
-            email="coach_facial@prueba.cl",
-            password="Prueba123456",
-            rol="COACH"
-        )
-
-        self.socio = Usuario.objects.create_user(
-            username="socio_facial",
-            email="socio_facial@prueba.cl",
-            password="Prueba123456",
-            rol="SOCIO",
-            reconocimiento_facial_habilitado=True
-        )
-
-        self.registro = RegistroFacial.objects.create(
-            socio=self.socio,
-            activo=True,
-            consentimiento_otorgado=True,
-            consentimiento_confirmado_por_socio=True,
-            fecha_consentimiento=self.ahora,
-            fecha_confirmacion_socio=self.ahora,
-            fecha_enrolamiento=self.ahora,
-            version_consentimiento="1.0",
-            datos_biometricos_cifrados=b"datos_de_prueba",
-            registrado_por=self.duena
-        )
-
-        self.clase = Clase.objects.create(
-            tipo="STEP",
-            fecha=timezone.localdate(),
-            hora_inicio=time(18, 0),
-            hora_fin=time(19, 0),
-            coach=self.coach,
-            cupos=17,
-            activa=True
-        )
-
-        self.reserva = Reserva.objects.create(
-            socio=self.socio,
-            clase=self.clase,
-            estado=Reserva.Estado.CONFIRMADA,
-            asistencia=Reserva.Asistencia.PENDIENTE
-        )
-
-        self.sesion = SesionAsistenciaFacial.objects.create(
-            clase=self.clase,
-            habilitada=True,
-            habilitada_por=self.duena,
-            fecha_habilitacion=self.ahora
-        )
+        cache.clear()
+        self.addCleanup(cache.clear)
 
         self.url = (
             "/api/membresias/"
@@ -103,24 +32,47 @@ class DisponibilidadFacialTest(TestCase):
         )
 
         self.client.force_authenticate(
-            user=self.socio
+            user=self.duena
+        )
+
+    def consultar(self):
+
+        return self.client.get(
+            self.url,
+            {"clase_id": self.clase.id}
         )
 
     def comprobar_no_disponible(self, codigo):
 
-        respuesta = self.client.get(self.url)
+        respuesta = self.consultar()
 
-        self.assertEqual(respuesta.status_code, 200)
-        self.assertFalse(respuesta.data["disponible"])
-        self.assertEqual(respuesta.data["codigo"], codigo)
-        self.assertEqual(respuesta.data["reservas"], [])
+        self.assertEqual(
+            respuesta.status_code,
+            200,
+            respuesta.data
+        )
+
+        self.assertFalse(
+            respuesta.data["disponible"]
+        )
+
+        self.assertEqual(
+            respuesta.data["codigo"],
+            codigo
+        )
+
+        self.assertEqual(
+            respuesta.data["reservas"],
+            []
+        )
 
     def test_socio_disponible(self):
 
-        respuesta = self.client.get(self.url)
+        respuesta = self.consultar()
 
         self.assertEqual(respuesta.status_code, 200)
         self.assertTrue(respuesta.data["disponible"])
+
         self.assertEqual(
             respuesta.data["codigo"],
             "DISPONIBLE"
@@ -131,9 +83,21 @@ class DisponibilidadFacialTest(TestCase):
             1
         )
 
+        reserva = respuesta.data["reservas"][0]
+
         self.assertEqual(
-            respuesta.data["reservas"][0]["reserva_id"],
+            reserva["reserva_id"],
             self.reserva.id
+        )
+
+        self.assertEqual(
+            reserva["socio_id"],
+            self.socio.id
+        )
+
+        self.assertEqual(
+            reserva["clase_id"],
+            self.clase.id
         )
 
     def test_socio_sin_registro_facial(self):
@@ -141,7 +105,7 @@ class DisponibilidadFacialTest(TestCase):
         self.registro.delete()
 
         self.comprobar_no_disponible(
-            "SIN_REGISTRO_FACIAL"
+            "SIN_SOCIOS_HABILITADOS"
         )
 
     def test_socio_sin_consentimiento(self):
@@ -150,7 +114,7 @@ class DisponibilidadFacialTest(TestCase):
         self.registro.save()
 
         self.comprobar_no_disponible(
-            "SIN_CONSENTIMIENTO"
+            "SIN_SOCIOS_HABILITADOS"
         )
 
     def test_consentimiento_no_confirmado(self):
@@ -159,7 +123,7 @@ class DisponibilidadFacialTest(TestCase):
         self.registro.save()
 
         self.comprobar_no_disponible(
-            "SIN_CONSENTIMIENTO"
+            "SIN_SOCIOS_HABILITADOS"
         )
 
     def test_consentimiento_revocado(self):
@@ -171,7 +135,7 @@ class DisponibilidadFacialTest(TestCase):
         self.registro.save()
 
         self.comprobar_no_disponible(
-            "SIN_CONSENTIMIENTO"
+            "SIN_SOCIOS_HABILITADOS"
         )
 
     def test_registro_facial_inactivo(self):
@@ -180,7 +144,7 @@ class DisponibilidadFacialTest(TestCase):
         self.registro.save()
 
         self.comprobar_no_disponible(
-            "RECONOCIMIENTO_INACTIVO"
+            "SIN_SOCIOS_HABILITADOS"
         )
 
     def test_socio_reconocimiento_deshabilitado(self):
@@ -189,7 +153,7 @@ class DisponibilidadFacialTest(TestCase):
         self.socio.save()
 
         self.comprobar_no_disponible(
-            "RECONOCIMIENTO_INACTIVO"
+            "SIN_SOCIOS_HABILITADOS"
         )
 
     def test_socio_sin_datos_biometricos(self):
@@ -198,7 +162,7 @@ class DisponibilidadFacialTest(TestCase):
         self.registro.save()
 
         self.comprobar_no_disponible(
-            "RECONOCIMIENTO_INACTIVO"
+            "SIN_SOCIOS_HABILITADOS"
         )
 
     def test_socio_sin_reserva(self):
@@ -206,7 +170,7 @@ class DisponibilidadFacialTest(TestCase):
         self.reserva.delete()
 
         self.comprobar_no_disponible(
-            "SIN_RESERVA"
+            "SIN_RESERVAS"
         )
 
     def test_reserva_pendiente(self):
@@ -215,7 +179,7 @@ class DisponibilidadFacialTest(TestCase):
         self.reserva.save()
 
         self.comprobar_no_disponible(
-            "SIN_RESERVA"
+            "SIN_RESERVAS"
         )
 
     def test_reserva_cancelada(self):
@@ -224,7 +188,7 @@ class DisponibilidadFacialTest(TestCase):
         self.reserva.save()
 
         self.comprobar_no_disponible(
-            "SIN_RESERVA"
+            "SIN_RESERVAS"
         )
 
     def test_clase_inactiva(self):
@@ -233,7 +197,7 @@ class DisponibilidadFacialTest(TestCase):
         self.clase.save()
 
         self.comprobar_no_disponible(
-            "SIN_RESERVA"
+            "CLASE_INACTIVA"
         )
 
     def test_clase_otro_dia(self):
@@ -245,7 +209,7 @@ class DisponibilidadFacialTest(TestCase):
         self.clase.save()
 
         self.comprobar_no_disponible(
-            "SIN_RESERVA"
+            "FECHA_NO_VALIDA"
         )
 
     def test_sesion_facial_inexistente(self):
@@ -305,25 +269,27 @@ class DisponibilidadFacialTest(TestCase):
             "ASISTENCIA_RESUELTA"
         )
 
-    def test_duena_no_puede_consultar_como_socio(self):
+    def test_duena_puede_consultar(self):
 
         self.client.force_authenticate(
             user=self.duena
         )
 
-        respuesta = self.client.get(self.url)
+        respuesta = self.consultar()
 
-        self.assertEqual(respuesta.status_code, 403)
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTrue(respuesta.data["disponible"])
 
-    def test_coach_no_puede_consultar_como_socio(self):
+    def test_coach_puede_consultar_su_clase(self):
 
         self.client.force_authenticate(
             user=self.coach
         )
 
-        respuesta = self.client.get(self.url)
+        respuesta = self.consultar()
 
-        self.assertEqual(respuesta.status_code, 403)
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTrue(respuesta.data["disponible"])
 
     def test_usuario_no_autenticado(self):
 
@@ -331,30 +297,23 @@ class DisponibilidadFacialTest(TestCase):
             user=None
         )
 
-        respuesta = self.client.get(self.url)
+        respuesta = self.consultar()
 
         self.assertEqual(respuesta.status_code, 401)
 
-    def test_no_consultar_reservas_de_otro_socio(self):
+    def test_otro_coach_no_puede_consultar(self):
 
-        otro_socio = Usuario.objects.create_user(
-            username="otro_socio",
-            email="otro_socio@prueba.cl",
-            password="Prueba123456",
-            rol="SOCIO",
-            reconocimiento_facial_habilitado=True
+        self.client.force_authenticate(
+            user=self.otro_coach
         )
 
-        self.reserva.socio = otro_socio
-        self.reserva.save()
+        respuesta = self.consultar()
 
-        self.comprobar_no_disponible(
-            "SIN_RESERVA"
-        )
+        self.assertEqual(respuesta.status_code, 404)
 
     def test_consulta_no_modifica_asistencia(self):
 
-        respuesta = self.client.get(self.url)
+        respuesta = self.consultar()
 
         self.assertEqual(respuesta.status_code, 200)
 
@@ -367,4 +326,98 @@ class DisponibilidadFacialTest(TestCase):
 
         self.assertIsNone(
             self.reserva.fecha_registro_asistencia
+        )
+
+        self.assertIsNone(
+            self.reserva.registrado_por_id
+        )
+
+    def test_socio_no_puede_consultar(self):
+
+        self.client.force_authenticate(
+            user=self.socio
+        )
+
+        respuesta = self.consultar()
+
+        self.assertEqual(respuesta.status_code, 403)
+
+    def test_consulta_sin_clase_id(self):
+
+        respuesta = self.client.get(self.url)
+
+        self.assertEqual(respuesta.status_code, 400)
+
+    def test_consulta_clase_id_invalido(self):
+
+        respuesta = self.client.get(
+            self.url,
+            {"clase_id": "invalido"}
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+
+    def test_consulta_clase_inexistente(self):
+
+        respuesta = self.client.get(
+            self.url,
+            {"clase_id": 999999}
+        )
+
+        self.assertEqual(respuesta.status_code, 404)
+
+    def test_socio_inactivo_no_disponible(self):
+
+        self.socio.is_active = False
+        self.socio.save()
+
+        self.comprobar_no_disponible(
+            "SIN_SOCIOS_HABILITADOS"
+        )
+
+    def test_consulta_no_expone_datos_biometricos(self):
+
+        respuesta = self.consultar()
+
+        self.assertEqual(respuesta.status_code, 200)
+
+        campos_prohibidos = [
+            "vector",
+            "distancia",
+            "tolerancia",
+            "imagen",
+            "fotogramas",
+            "datos_biometricos_cifrados"
+        ]
+
+        for reserva in respuesta.data["reservas"]:
+
+            for campo in campos_prohibidos:
+
+                self.assertNotIn(campo, reserva)
+
+    def test_totales_disponibilidad(self):
+
+        respuesta = self.consultar()
+
+        self.assertEqual(respuesta.status_code, 200)
+
+        self.assertEqual(
+            respuesta.data["total_inscritos"],
+            1
+        )
+
+        self.assertEqual(
+            respuesta.data["total_registrados"],
+            0
+        )
+
+        self.assertEqual(
+            respuesta.data["total_pendientes"],
+            1
+        )
+
+        self.assertEqual(
+            respuesta.data["total_disponibles"],
+            1
         )

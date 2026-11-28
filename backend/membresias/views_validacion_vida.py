@@ -1,4 +1,3 @@
-
 import logging
 
 from django.db import transaction
@@ -30,7 +29,8 @@ from .models import (
 )
 
 from .views_disponibilidad_facial import (
-    SoloSocioAsistenciaFacial,
+    PersonalAsistenciaFacial,
+    puede_administrar_clase,
 )
 
 
@@ -56,12 +56,40 @@ def resolver_desafio(desafio, estado):
     )
 
 
-def obtener_contexto_bloqueado(socio_id, token):
+def obtener_contexto_bloqueado(responsable_id, token):
+
+    referencia = (
+        DesafioPruebaVida.objects
+        .filter(
+            token=token,
+            generado_por_id=responsable_id
+        )
+        .values(
+            "id",
+            "reserva_id",
+            "reserva__socio_id",
+            "reserva__clase_id",
+            "sesion_id",
+        )
+        .first()
+    )
+
+    if referencia is None:
+        return None
+
+    responsable = Usuario.objects.filter(
+        pk=responsable_id
+    ).first()
+
+    if responsable is None:
+        return None
 
     socio = (
         Usuario.objects
         .select_for_update()
-        .filter(pk=socio_id)
+        .filter(
+            pk=referencia["reserva__socio_id"]
+        )
         .first()
     )
 
@@ -74,24 +102,6 @@ def obtener_contexto_bloqueado(socio_id, token):
         .filter(socio=socio)
         .first()
     )
-
-    referencia = (
-        DesafioPruebaVida.objects
-        .filter(
-            token=token,
-            reserva__socio=socio
-        )
-        .values(
-            "id",
-            "reserva_id",
-            "reserva__clase_id",
-            "sesion_id",
-        )
-        .first()
-    )
-
-    if referencia is None:
-        return None
 
     clase = (
         Clase.objects
@@ -136,7 +146,8 @@ def obtener_contexto_bloqueado(socio_id, token):
             pk=referencia["id"],
             token=token,
             reserva=reserva,
-            sesion=sesion
+            sesion=sesion,
+            generado_por=responsable
         )
         .first()
     )
@@ -151,6 +162,7 @@ def obtener_contexto_bloqueado(socio_id, token):
         registro.socio = socio
 
     return {
+        "responsable": responsable,
         "socio": socio,
         "registro": registro,
         "clase": clase,
@@ -162,6 +174,7 @@ def obtener_contexto_bloqueado(socio_id, token):
 
 def validar_contexto(contexto):
 
+    responsable = contexto["responsable"]
     socio = contexto["socio"]
     registro = contexto["registro"]
     clase = contexto["clase"]
@@ -169,18 +182,36 @@ def validar_contexto(contexto):
     reserva = contexto["reserva"]
     desafio = contexto["desafio"]
 
+    if not puede_administrar_clase(
+        responsable,
+        clase
+    ):
+
+        return (
+            "SIN_PERMISOS",
+            "No tienes permiso para administrar "
+            "la asistencia de esta clase."
+        )
+
+    if desafio.generado_por_id != responsable.id:
+
+        return (
+            "RESPONSABLE_NO_VALIDO",
+            "El desafío pertenece a otro responsable."
+        )
+
     if not socio.is_active or socio.rol != "SOCIO":
 
         return (
             "SOCIO_NO_AUTORIZADO",
-            "No puedes utilizar el reconocimiento facial."
+            "El socio no tiene una cuenta activa válida."
         )
 
     if registro is None:
 
         return (
             "SIN_REGISTRO_FACIAL",
-            "No tienes un registro facial."
+            "El socio no tiene un registro facial."
         )
 
     try:
@@ -191,7 +222,8 @@ def validar_contexto(contexto):
 
         return (
             "SIN_CONSENTIMIENTO",
-            "Debes autorizar el reconocimiento facial."
+            "El socio no ha autorizado "
+            "el reconocimiento facial."
         )
 
     if (
@@ -202,7 +234,8 @@ def validar_contexto(contexto):
 
         return (
             "RECONOCIMIENTO_INACTIVO",
-            "No tienes el reconocimiento facial activo."
+            "El socio no tiene el "
+            "reconocimiento facial activo."
         )
 
     if (
@@ -220,7 +253,7 @@ def validar_contexto(contexto):
 
         return (
             "ASISTENCIA_RESUELTA",
-            "La asistencia de esta clase ya fue resuelta."
+            "La asistencia de este socio ya fue resuelta."
         )
 
     if timezone.now() >= desafio.fecha_expiracion:
@@ -249,7 +282,7 @@ class ValidarPruebaVidaView(APIView):
 
     permission_classes = [
         permissions.IsAuthenticated,
-        SoloSocioAsistenciaFacial,
+        PersonalAsistenciaFacial,
     ]
 
     parser_classes = [
@@ -303,10 +336,19 @@ class ValidarPruebaVidaView(APIView):
             estado_desafio
         )
 
+        estado_http = (
+            status.HTTP_403_FORBIDDEN
+            if codigo in [
+                "SIN_PERMISOS",
+                "RESPONSABLE_NO_VALIDO",
+            ]
+            else status.HTTP_409_CONFLICT
+        )
+
         return self.error(
             codigo,
             mensaje,
-            status.HTTP_409_CONFLICT
+            estado_http
         )
 
     def post(self, request):
@@ -371,7 +413,8 @@ class ValidarPruebaVidaView(APIView):
 
                 return self.error(
                     "DESAFIO_NO_ENCONTRADO",
-                    "No se encontró un desafío válido.",
+                    "No se encontró un desafío válido "
+                    "para este responsable.",
                     status.HTTP_404_NOT_FOUND
                 )
 
@@ -433,7 +476,13 @@ class ValidarPruebaVidaView(APIView):
                 direccion
             )
 
-        except ValueError:
+        except ValueError as e:
+
+            print(
+                "ERROR REAL DE FOTOGRAMAS:",
+                repr(e),
+                flush=True
+            )
 
             error_procesamiento = (
                 "FOTOGRAMAS_NO_VALIDOS",
@@ -549,16 +598,19 @@ class ValidarPruebaVidaView(APIView):
                     resultado["mensaje"]
                 )
 
-            
             reserva = contexto["reserva"]
+            responsable = contexto["responsable"]
+            socio = contexto["socio"]
 
-            reserva.asistencia = Reserva.Asistencia.ASISTIO
+            reserva.asistencia = (
+                Reserva.Asistencia.ASISTIO
+            )
 
             reserva.fecha_registro_asistencia = (
                 timezone.now()
             )
 
-            reserva.registrado_por = contexto["socio"]
+            reserva.registrado_por = responsable
 
             reserva.save(
                 update_fields=[
@@ -580,12 +632,15 @@ class ValidarPruebaVidaView(APIView):
                     "asistencia_registrada": True,
                     "codigo": "ASISTENCIA_REGISTRADA",
                     "mensaje": (
-                        "Tu identidad fue verificada "
-                        "y tu asistencia se registró "
-                        "correctamente."
+                        "La identidad del socio fue verificada "
+                        "y su asistencia se registró correctamente."
                     ),
                     "reserva_id": reserva.id,
                     "clase_id": contexto["clase"].id,
+                    "socio_id": socio.id,
+                    "nombre_socio": socio.get_full_name().strip(),
+                    "registrado_por": responsable.id,
+                    "rol_responsable": responsable.rol,
                     "asistencia": reserva.asistencia,
                     "fecha_registro_asistencia": (
                         reserva.fecha_registro_asistencia

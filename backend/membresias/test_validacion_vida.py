@@ -6,7 +6,8 @@ from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
 
-from membresias import test_disponibilidad_facial
+from django.test import TestCase
+from membresias import test_asistencia_facial_personal
 
 from membresias.models import (
     Reserva,
@@ -14,13 +15,22 @@ from membresias.models import (
 )
 
 
-class ValidacionVidaEndpointTest(
-    test_disponibilidad_facial.DisponibilidadFacialTest
-):
+class ValidacionVidaEndpointTest(TestCase):
+
+    crear_usuario = (
+        test_asistencia_facial_personal
+        .AsistenciaFacialPersonalTest.crear_usuario
+    )
 
     def setUp(self):
 
-        super().setUp()
+        test_asistencia_facial_personal.AsistenciaFacialPersonalTest.setUp(
+            self
+        )
+
+        self.client.force_authenticate(
+            user=self.duena
+        )
 
         cache.clear()
         self.addCleanup(cache.clear)
@@ -161,7 +171,7 @@ class ValidacionVidaEndpointTest(
 
         self.assertEqual(
             self.reserva.registrado_por_id,
-            self.socio.id
+            self.duena.id
         )
 
         self.comprobar_estado(
@@ -624,10 +634,10 @@ class ValidacionVidaEndpointTest(
             DesafioPruebaVida.Estado.EXPIRADO
         )
 
-    def test_duena_no_autorizada(self):
+    def test_socio_no_autorizado(self):
 
         self.client.force_authenticate(
-            user=self.duena
+            user=self.socio
         )
 
         respuesta = self.validar()
@@ -637,7 +647,9 @@ class ValidacionVidaEndpointTest(
             403
         )
 
-    def test_coach_no_autorizado(self):
+        self.validador.assert_not_called()
+
+    def test_coach_no_valida_desafio_de_duena(self):
 
         self.client.force_authenticate(
             user=self.coach
@@ -647,8 +659,10 @@ class ValidacionVidaEndpointTest(
 
         self.assertEqual(
             respuesta.status_code,
-            403
+            404
         )
+
+        self.validador.assert_not_called()
 
     def test_usuario_no_autenticado(self):
 
@@ -843,4 +857,416 @@ class ValidacionVidaEndpointTest(
         self.assertEqual(
             respuesta.data["codigo"],
             "ASISTENCIA_RESUELTA"
+        )
+
+    def test_coach_no_descuenta_membresia(self):
+
+        membresia = self.crear_membresia_prueba()
+
+        self.desafio.delete()
+
+        self.client.force_authenticate(
+            user=self.coach
+        )
+
+        desafio = self.client.post(
+            self.url_desafio,
+            {"reserva_id": self.reserva.id},
+            format="json"
+        )
+
+        self.assertEqual(
+            desafio.status_code,
+            201,
+            desafio.data
+        )
+
+        self.token = desafio.data["token_desafio"]
+
+        respuesta = self.validar()
+
+        self.assertEqual(
+            respuesta.status_code,
+            200,
+            respuesta.data
+        )
+
+        membresia.refresh_from_db()
+        self.reserva.refresh_from_db()
+
+        self.assertEqual(
+            membresia.clases_restantes,
+            9
+        )
+
+        self.assertEqual(
+            self.reserva.asistencia,
+            Reserva.Asistencia.ASISTIO
+        )
+
+        self.assertEqual(
+            self.reserva.registrado_por_id,
+            self.coach.id
+        )
+
+        self.assertFalse(
+            self.reserva.clase_devuelta
+        )
+
+    def test_asistencia_sin_membresia(self):
+
+        self.assertIsNone(
+            self.reserva.membresia_id
+        )
+
+        respuesta = self.validar()
+
+        self.assertEqual(
+            respuesta.status_code,
+            200,
+            respuesta.data
+        )
+
+        self.reserva.refresh_from_db()
+
+        self.assertEqual(
+            self.reserva.asistencia,
+            Reserva.Asistencia.ASISTIO
+        )
+
+        self.assertIsNone(
+            self.reserva.membresia_id
+        )
+
+    def test_revocacion_durante_validacion(self):
+
+        resultado = self.validador.return_value
+
+        def procesar(*args, **kwargs):
+
+            self.registro.consentimiento_otorgado = False
+
+            self.registro.save(
+                update_fields=[
+                    "consentimiento_otorgado"
+                ]
+            )
+
+            return resultado
+
+        self.validador.side_effect = procesar
+
+        respuesta = self.validar()
+
+        self.assertEqual(
+            respuesta.status_code,
+            409,
+            respuesta.data
+        )
+
+        self.assertEqual(
+            respuesta.data["codigo"],
+            "SIN_CONSENTIMIENTO"
+        )
+
+        self.reserva.refresh_from_db()
+
+        self.assertEqual(
+            self.reserva.asistencia,
+            Reserva.Asistencia.PENDIENTE
+        )
+
+        self.assertIsNone(
+            self.reserva.registrado_por_id
+        )
+
+        self.comprobar_estado(
+            DesafioPruebaVida.Estado.CANCELADO
+        )
+
+    def test_registro_facial_modificado_durante_validacion(self):
+
+        resultado = self.validador.return_value
+
+        def procesar(*args, **kwargs):
+
+            self.registro.datos_biometricos_cifrados = (
+                b"nuevo_registro_de_prueba"
+            )
+
+            self.registro.save(
+                update_fields=[
+                    "datos_biometricos_cifrados"
+                ]
+            )
+
+            return resultado
+
+        self.validador.side_effect = procesar
+
+        respuesta = self.validar()
+
+        self.assertEqual(
+            respuesta.status_code,
+            409,
+            respuesta.data
+        )
+
+        self.assertEqual(
+            respuesta.data["codigo"],
+            "REGISTRO_FACIAL_MODIFICADO"
+        )
+
+        self.reserva.refresh_from_db()
+
+        self.assertEqual(
+            self.reserva.asistencia,
+            Reserva.Asistencia.PENDIENTE
+        )
+
+        self.assertIsNone(
+            self.reserva.registrado_por_id
+        )
+
+        self.comprobar_estado(
+            DesafioPruebaVida.Estado.CANCELADO
+        )
+    def crear_pago_particular_prueba(self):
+
+        from pagos.models import Pago
+
+        pago = Pago.objects.create(
+            socio=self.socio,
+            tipo_pago=Pago.TipoPago.CLASE_PARTICULAR,
+            metodo_pago=Pago.MetodoPago.TRANSFERENCIA,
+            monto=3500,
+            estado=Pago.EstadoPago.APROBADO
+        )
+
+        self.reserva.pago = pago
+        self.reserva.membresia = None
+
+        self.reserva.save(
+            update_fields=["pago", "membresia"]
+        )
+
+        return pago
+
+    def comprobar_pago_particular(self, pago):
+
+        from pagos.models import Pago
+
+        pago.refresh_from_db()
+        self.reserva.refresh_from_db()
+
+        self.assertEqual(
+            pago.estado,
+            Pago.EstadoPago.APROBADO
+        )
+
+        self.assertEqual(pago.monto, 3500)
+
+        self.assertEqual(
+            pago.tipo_pago,
+            Pago.TipoPago.CLASE_PARTICULAR
+        )
+
+        self.assertEqual(
+            self.reserva.pago_id,
+            pago.id
+        )
+
+        self.assertIsNone(
+            self.reserva.membresia_id
+        )
+
+        self.assertFalse(
+            self.reserva.clase_devuelta
+        )
+
+        self.assertEqual(
+            Pago.objects.filter(
+                socio=self.socio
+            ).count(),
+            1
+        )
+
+    def test_duena_registra_asistencia_pago_particular(self):
+
+        pago = self.crear_pago_particular_prueba()
+
+        respuesta = self.validar()
+
+        self.assertEqual(
+            respuesta.status_code,
+            200,
+            respuesta.data
+        )
+
+        self.comprobar_pago_particular(pago)
+
+        self.assertEqual(
+            self.reserva.asistencia,
+            Reserva.Asistencia.ASISTIO
+        )
+
+        self.assertEqual(
+            self.reserva.registrado_por_id,
+            self.duena.id
+        )
+
+        self.assertIsNotNone(
+            self.reserva.fecha_registro_asistencia
+        )
+
+    def test_coach_registra_asistencia_pago_particular(self):
+
+        pago = self.crear_pago_particular_prueba()
+
+        self.desafio.delete()
+
+        self.client.force_authenticate(
+            user=self.coach
+        )
+
+        desafio = self.client.post(
+            self.url_desafio,
+            {"reserva_id": self.reserva.id},
+            format="json"
+        )
+
+        self.assertEqual(
+            desafio.status_code,
+            201,
+            desafio.data
+        )
+
+        self.token = desafio.data["token_desafio"]
+
+        respuesta = self.validar()
+
+        self.assertEqual(
+            respuesta.status_code,
+            200,
+            respuesta.data
+        )
+
+        self.comprobar_pago_particular(pago)
+
+        self.assertEqual(
+            self.reserva.asistencia,
+            Reserva.Asistencia.ASISTIO
+        )
+
+        self.assertEqual(
+            self.reserva.registrado_por_id,
+            self.coach.id
+        )
+
+    def test_asistencia_duplicada_no_modifica_pago_particular(self):
+
+        pago = self.crear_pago_particular_prueba()
+
+        primera = self.validar()
+
+        self.assertEqual(
+            primera.status_code,
+            200,
+            primera.data
+        )
+
+        self.reserva.refresh_from_db()
+
+        fecha_original = (
+            self.reserva.fecha_registro_asistencia
+        )
+
+        segunda = self.validar()
+
+        self.assertEqual(
+            segunda.status_code,
+            409,
+            segunda.data
+        )
+
+        self.comprobar_pago_particular(pago)
+
+        self.assertEqual(
+            self.reserva.asistencia,
+            Reserva.Asistencia.ASISTIO
+        )
+
+        self.assertEqual(
+            self.reserva.fecha_registro_asistencia,
+            fecha_original
+        )
+
+        self.validador.assert_called_once()
+
+    def test_rostro_incorrecto_no_modifica_pago_particular(self):
+
+        pago = self.crear_pago_particular_prueba()
+
+        self.validador.return_value = {
+            "superada": False,
+            "identidad_verificada": False,
+            "codigo": "ROSTRO_NO_COINCIDE",
+            "mensaje": "El rostro no coincide."
+        }
+
+        respuesta = self.validar()
+
+        self.assertEqual(
+            respuesta.status_code,
+            400,
+            respuesta.data
+        )
+
+        self.comprobar_pago_particular(pago)
+
+        self.assertEqual(
+            self.reserva.asistencia,
+            Reserva.Asistencia.PENDIENTE
+        )
+
+        self.assertIsNone(
+            self.reserva.fecha_registro_asistencia
+        )
+
+        self.assertIsNone(
+            self.reserva.registrado_por_id
+        )
+
+    def test_prueba_vida_fallida_no_modifica_pago_particular(self):
+
+        pago = self.crear_pago_particular_prueba()
+
+        self.validador.return_value = {
+            "superada": False,
+            "identidad_verificada": True,
+            "codigo": "SECUENCIA_INCOMPLETA",
+            "mensaje": "Movimientos incompletos."
+        }
+
+        respuesta = self.validar()
+
+        self.assertEqual(
+            respuesta.status_code,
+            400,
+            respuesta.data
+        )
+
+        self.comprobar_pago_particular(pago)
+
+        self.assertEqual(
+            self.reserva.asistencia,
+            Reserva.Asistencia.PENDIENTE
+        )
+
+        self.assertIsNone(
+            self.reserva.fecha_registro_asistencia
+        )
+
+        self.assertIsNone(
+            self.reserva.registrado_por_id
         )

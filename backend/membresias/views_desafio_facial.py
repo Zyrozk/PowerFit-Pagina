@@ -1,4 +1,3 @@
-
 import secrets
 from datetime import timedelta
 
@@ -24,7 +23,8 @@ from .models import (
 )
 
 from .views_disponibilidad_facial import (
-    SoloSocioAsistenciaFacial,
+    PersonalAsistenciaFacial,
+    puede_administrar_clase,
 )
 
 
@@ -41,7 +41,7 @@ class CrearDesafioFacialView(APIView):
 
     permission_classes = [
         permissions.IsAuthenticated,
-        SoloSocioAsistenciaFacial,
+        PersonalAsistenciaFacial,
     ]
 
     throttle_classes = [
@@ -62,6 +62,8 @@ class CrearDesafioFacialView(APIView):
     @transaction.atomic
     def post(self, request):
 
+        responsable = request.user
+
         try:
 
             reserva_id = int(
@@ -78,16 +80,45 @@ class CrearDesafioFacialView(APIView):
                 "Debes seleccionar una reserva válida."
             )
 
-        socio = Usuario.objects.select_for_update().get(
-            pk=request.user.pk
+        referencias = Reserva.objects.filter(
+            pk=reserva_id,
+            estado=Reserva.Estado.CONFIRMADA
         )
 
-        if not socio.is_active or socio.rol != "SOCIO":
+        if responsable.rol == "COACH":
+
+            referencias = referencias.filter(
+                clase__coach_id=responsable.id
+            )
+
+        referencia = referencias.values(
+            "socio_id",
+            "clase_id"
+        ).first()
+
+        if referencia is None:
 
             return self.error(
-                "SOCIO_NO_AUTORIZADO",
-                "No puedes utilizar el reconocimiento facial.",
-                status.HTTP_403_FORBIDDEN
+                "RESERVA_NO_VALIDA",
+                "La reserva no existe o no tienes "
+                "permiso para administrarla.",
+                status.HTTP_404_NOT_FOUND
+            )
+
+        socio = Usuario.objects.select_for_update().filter(
+            pk=referencia["socio_id"]
+        ).first()
+
+        if (
+            socio is None
+            or not socio.is_active
+            or socio.rol != "SOCIO"
+        ):
+
+            return self.error(
+                "SOCIO_NO_VALIDO",
+                "La cuenta del socio no está activa "
+                "o no corresponde a un socio válido."
             )
 
         registro = (
@@ -96,50 +127,6 @@ class CrearDesafioFacialView(APIView):
             .filter(socio=socio)
             .first()
         )
-
-        if registro is None:
-
-            return self.error(
-                "SIN_REGISTRO_FACIAL",
-                "No tienes un registro de reconocimiento facial."
-            )
-
-        try:
-
-            validar_consentimiento_facial(registro)
-
-        except ValueError:
-
-            return self.error(
-                "SIN_CONSENTIMIENTO",
-                "Debes autorizar el reconocimiento facial."
-            )
-
-        if (
-            not registro.activo
-            or not socio.reconocimiento_facial_habilitado
-            or not registro.datos_biometricos_cifrados
-        ):
-
-            return self.error(
-                "RECONOCIMIENTO_INACTIVO",
-                "No tienes el reconocimiento facial activo."
-            )
-
-        referencia = Reserva.objects.filter(
-            pk=reserva_id,
-            socio=socio
-        ).values(
-            "clase_id"
-        ).first()
-
-        if referencia is None:
-
-            return self.error(
-                "RESERVA_NO_VALIDA",
-                "No tienes una reserva confirmada válida.",
-                status.HTTP_404_NOT_FOUND
-            )
 
         clase = Clase.objects.select_for_update().filter(
             pk=referencia["clase_id"],
@@ -150,9 +137,21 @@ class CrearDesafioFacialView(APIView):
         if clase is None:
 
             return self.error(
-                "RESERVA_NO_VALIDA",
+                "CLASE_NO_DISPONIBLE",
                 "La clase seleccionada no está disponible.",
                 status.HTTP_404_NOT_FOUND
+            )
+
+        if not puede_administrar_clase(
+            responsable,
+            clase
+        ):
+
+            return self.error(
+                "SIN_PERMISOS",
+                "No tienes permiso para administrar "
+                "la asistencia de esta clase.",
+                status.HTTP_403_FORBIDDEN
             )
 
         sesion = (
@@ -178,7 +177,8 @@ class CrearDesafioFacialView(APIView):
 
             return self.error(
                 "RESERVA_NO_VALIDA",
-                "No tienes una reserva confirmada válida.",
+                "El socio no tiene una reserva "
+                "confirmada válida.",
                 status.HTTP_404_NOT_FOUND
             )
 
@@ -186,7 +186,7 @@ class CrearDesafioFacialView(APIView):
 
             return self.error(
                 "ASISTENCIA_RESUELTA",
-                "La asistencia de esta clase ya fue resuelta.",
+                "La asistencia de este socio ya fue resuelta.",
                 status.HTTP_409_CONFLICT
             )
 
@@ -202,7 +202,52 @@ class CrearDesafioFacialView(APIView):
                 "para esta clase en este momento."
             )
 
+        if registro is None:
+
+            return self.error(
+                "SIN_REGISTRO_FACIAL",
+                "El socio no tiene un registro facial. "
+                "Puedes utilizar el registro mediante QR."
+            )
+
+        try:
+
+            validar_consentimiento_facial(registro)
+
+        except ValueError:
+
+            return self.error(
+                "SIN_CONSENTIMIENTO",
+                "El socio no ha autorizado "
+                "el reconocimiento facial."
+            )
+
+        if (
+            not registro.activo
+            or not socio.reconocimiento_facial_habilitado
+            or not registro.datos_biometricos_cifrados
+        ):
+
+            return self.error(
+                "RECONOCIMIENTO_INACTIVO",
+                "El socio no tiene el reconocimiento facial activo."
+            )
+
         ahora = timezone.now()
+
+        fecha_expiracion = min(
+            ahora + timedelta(
+                seconds=DURACION_DESAFIO_SEGUNDOS
+            ),
+            sesion.fin_validez
+        )
+
+        if fecha_expiracion <= ahora:
+
+            return self.error(
+                "SESION_NO_DISPONIBLE",
+                "El período de asistencia ha finalizado."
+            )
 
         DesafioPruebaVida.objects.filter(
             reserva__socio=socio,
@@ -223,12 +268,28 @@ class CrearDesafioFacialView(APIView):
 
             return self.error(
                 "DESAFIO_EN_VALIDACION",
-                "Ya tienes una prueba de vida en procesamiento.",
+                "Ya existe una prueba de vida en "
+                "procesamiento para este socio.",
+                status.HTTP_409_CONFLICT
+            )
+
+        if DesafioPruebaVida.objects.filter(
+            reserva__socio=socio,
+            estado=DesafioPruebaVida.Estado.PENDIENTE
+        ).exclude(
+            generado_por=responsable
+        ).exists():
+
+            return self.error(
+                "DESAFIO_EN_CURSO",
+                "Otro responsable está realizando "
+                "una verificación facial para este socio.",
                 status.HTTP_409_CONFLICT
             )
 
         DesafioPruebaVida.objects.filter(
             reserva__socio=socio,
+            generado_por=responsable,
             estado=DesafioPruebaVida.Estado.PENDIENTE
         ).update(
             estado=DesafioPruebaVida.Estado.CANCELADO,
@@ -240,23 +301,10 @@ class CrearDesafioFacialView(APIView):
             DesafioPruebaVida.Direccion.DERECHA,
         ])
 
-        fecha_expiracion = min(
-            ahora + timedelta(
-                seconds=DURACION_DESAFIO_SEGUNDOS
-            ),
-            sesion.fin_validez
-        )
-
-        if fecha_expiracion <= ahora:
-
-            return self.error(
-                "SESION_NO_DISPONIBLE",
-                "El período de asistencia ha finalizado."
-            )
-
         desafio = DesafioPruebaVida.objects.create(
             reserva=reserva,
             sesion=sesion,
+            generado_por=responsable,
             token=secrets.token_hex(32),
             direccion=direccion,
             estado=DesafioPruebaVida.Estado.PENDIENTE,
@@ -273,11 +321,14 @@ class CrearDesafioFacialView(APIView):
                 "creado": True,
                 "codigo": "DESAFIO_CREADO",
                 "mensaje": (
-                    "Realiza los movimientos faciales solicitados."
+                    "El socio debe realizar los "
+                    "movimientos faciales solicitados."
                 ),
                 "token_desafio": desafio.token,
                 "reserva_id": reserva.id,
                 "clase_id": clase.id,
+                "socio_id": socio.id,
+                "generado_por": responsable.id,
                 "direccion": desafio.direccion,
                 "duracion_segundos": segundos_disponibles,
                 "fecha_expiracion": desafio.fecha_expiracion,

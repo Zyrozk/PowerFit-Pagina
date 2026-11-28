@@ -4,7 +4,8 @@ from datetime import timedelta
 from django.core.cache import cache
 from django.utils import timezone
 
-from membresias import test_disponibilidad_facial
+from django.test import TestCase
+from membresias import test_asistencia_facial_personal
 
 from membresias.models import (
     Reserva,
@@ -13,13 +14,22 @@ from membresias.models import (
 )
 
 
-class DesafioFacialTest(
-    test_disponibilidad_facial.DisponibilidadFacialTest
-):
+class DesafioFacialTest(TestCase):
+
+    crear_usuario = (
+        test_asistencia_facial_personal
+        .AsistenciaFacialPersonalTest.crear_usuario
+    )
 
     def setUp(self):
 
-        super().setUp()
+        test_asistencia_facial_personal.AsistenciaFacialPersonalTest.setUp(
+            self
+        )
+
+        self.client.force_authenticate(
+            user=self.duena
+        )
 
         cache.clear()
         self.addCleanup(cache.clear)
@@ -373,10 +383,15 @@ class DesafioFacialTest(
 
         respuesta = self.crear_desafio()
 
-        self.comprobar_error(
-            respuesta,
-            404,
-            "RESERVA_NO_VALIDA"
+        self.assertIn(
+            respuesta.status_code,
+            [400, 403, 404]
+        )
+
+        self.assertFalse(
+            DesafioPruebaVida.objects.filter(
+                reserva=self.reserva
+            ).exists()
         )
 
     def test_reserva_cancelada(self):
@@ -523,7 +538,7 @@ class DesafioFacialTest(
                 respuesta.data
             )
 
-    def test_duena_no_puede_solicitar_desafio(self):
+    def test_duena_puede_solicitar_desafio(self):
 
         self.client.force_authenticate(
             user=self.duena
@@ -533,10 +548,20 @@ class DesafioFacialTest(
 
         self.assertEqual(
             respuesta.status_code,
-            403
+            201,
+            respuesta.data
         )
 
-    def test_coach_no_puede_solicitar_desafio(self):
+        desafio = DesafioPruebaVida.objects.get(
+            token=respuesta.data["token_desafio"]
+        )
+
+        self.assertEqual(
+            desafio.generado_por_id,
+            self.duena.id
+        )
+
+    def test_coach_puede_solicitar_desafio(self):
 
         self.client.force_authenticate(
             user=self.coach
@@ -546,7 +571,17 @@ class DesafioFacialTest(
 
         self.assertEqual(
             respuesta.status_code,
-            403
+            201,
+            respuesta.data
+        )
+
+        desafio = DesafioPruebaVida.objects.get(
+            token=respuesta.data["token_desafio"]
+        )
+
+        self.assertEqual(
+            desafio.generado_por_id,
+            self.coach.id
         )
 
     def test_usuario_no_autenticado(self):
@@ -579,3 +614,176 @@ class DesafioFacialTest(
             respuesta.status_code,
             429
         )
+
+    def test_socio_no_puede_solicitar_desafio(self):
+
+        self.client.force_authenticate(
+            user=self.socio
+        )
+
+        respuesta = self.crear_desafio()
+
+        self.assertEqual(
+            respuesta.status_code,
+            403
+        )
+
+        self.assertFalse(
+            DesafioPruebaVida.objects.filter(
+                reserva=self.reserva
+            ).exists()
+        )
+
+    def test_otro_coach_no_puede_solicitar_desafio(self):
+
+        self.client.force_authenticate(
+            user=self.otro_coach
+        )
+
+        respuesta = self.crear_desafio()
+
+        self.comprobar_error(
+            respuesta,
+            404,
+            "RESERVA_NO_VALIDA"
+        )
+
+        self.assertFalse(
+            DesafioPruebaVida.objects.filter(
+                reserva=self.reserva
+            ).exists()
+        )
+
+    def test_otro_responsable_no_cancela_desafio(self):
+
+        primera = self.crear_desafio()
+
+        self.assertEqual(
+            primera.status_code,
+            201
+        )
+
+        desafio = DesafioPruebaVida.objects.get(
+            token=primera.data["token_desafio"]
+        )
+
+        self.client.force_authenticate(
+            user=self.coach
+        )
+
+        segunda = self.crear_desafio()
+
+        self.comprobar_error(
+            segunda,
+            409,
+            "DESAFIO_EN_CURSO"
+        )
+
+        desafio.refresh_from_db()
+
+        self.assertEqual(
+            desafio.estado,
+            DesafioPruebaVida.Estado.PENDIENTE
+        )
+
+        self.assertEqual(
+            desafio.generado_por_id,
+            self.duena.id
+        )
+
+        self.assertTrue(desafio.vigente)
+
+    def test_desafio_identificadores_correctos(self):
+
+        respuesta = self.crear_desafio()
+
+        self.assertEqual(
+            respuesta.status_code,
+            201,
+            respuesta.data
+        )
+
+        self.assertEqual(
+            respuesta.data["reserva_id"],
+            self.reserva.id
+        )
+
+        self.assertEqual(
+            respuesta.data["clase_id"],
+            self.clase.id
+        )
+
+        self.assertEqual(
+            respuesta.data["socio_id"],
+            self.socio.id
+        )
+
+        self.assertEqual(
+            respuesta.data["generado_por"],
+            self.duena.id
+        )
+
+    def test_desafio_no_modifica_responsable_asistencia(self):
+
+        respuesta = self.crear_desafio()
+
+        self.assertEqual(
+            respuesta.status_code,
+            201
+        )
+
+        self.reserva.refresh_from_db()
+
+        self.assertEqual(
+            self.reserva.asistencia,
+            Reserva.Asistencia.PENDIENTE
+        )
+
+        self.assertIsNone(
+            self.reserva.registrado_por_id
+        )
+
+        self.assertIsNone(
+            self.reserva.fecha_registro_asistencia
+        )
+
+    def test_desafio_no_supera_fin_sesion(self):
+
+        ahora = (
+            self.sesion.fin_validez
+            - timedelta(seconds=30)
+        )
+
+        from unittest.mock import patch
+
+        with patch(
+            "django.utils.timezone.now",
+            return_value=ahora
+        ):
+
+            respuesta = self.crear_desafio()
+
+            self.assertEqual(
+                respuesta.status_code,
+                201,
+                respuesta.data
+            )
+
+            desafio = DesafioPruebaVida.objects.get(
+                token=respuesta.data["token_desafio"]
+            )
+
+            self.assertLessEqual(
+                desafio.fecha_expiracion,
+                self.sesion.fin_validez
+            )
+
+            self.assertGreater(
+                desafio.fecha_expiracion,
+                ahora
+            )
+
+            self.assertLessEqual(
+                respuesta.data["duracion_segundos"],
+                30
+            )

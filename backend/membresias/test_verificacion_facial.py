@@ -5,18 +5,28 @@ from unittest.mock import patch
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 
-from membresias import test_disponibilidad_facial
+from django.test import TestCase
+from membresias import test_asistencia_facial_personal
 
 from .models import Reserva
 
 
-class VerificacionFacialTest(
-    test_disponibilidad_facial.DisponibilidadFacialTest
-):
+class VerificacionFacialTest(TestCase):
+
+    crear_usuario = (
+        test_asistencia_facial_personal
+        .AsistenciaFacialPersonalTest.crear_usuario
+    )
 
     def setUp(self):
 
-        super().setUp()
+        test_asistencia_facial_personal.AsistenciaFacialPersonalTest.setUp(
+            self
+        )
+
+        self.client.force_authenticate(
+            user=self.duena
+        )
 
         cache.clear()
         self.addCleanup(cache.clear)
@@ -204,7 +214,7 @@ class VerificacionFacialTest(
 
         self.verificador.assert_not_called()
 
-    def test_verificacion_reserva_otro_socio(self):
+    def test_verificacion_reserva_usuario_no_socio(self):
 
         self.reserva.socio = self.coach
         self.reserva.save()
@@ -213,8 +223,7 @@ class VerificacionFacialTest(
 
         self.comprobar_error(
             respuesta,
-            "RESERVA_NO_VALIDA",
-            404
+            "SOCIO_NO_VALIDO"
         )
 
         self.verificador.assert_not_called()
@@ -228,8 +237,7 @@ class VerificacionFacialTest(
 
         self.comprobar_error(
             respuesta,
-            "RESERVA_NO_VALIDA",
-            404
+            "RESERVA_NO_CONFIRMADA"
         )
 
         self.verificador.assert_not_called()
@@ -379,18 +387,22 @@ class VerificacionFacialTest(
                 respuesta.data
             )
 
-    def test_verificacion_duena_no_autorizada(self):
+    def test_verificacion_socio_no_autorizado(self):
 
         self.client.force_authenticate(
-            user=self.duena
+            user=self.socio
         )
 
         respuesta = self.verificar()
 
-        self.assertEqual(respuesta.status_code, 403)
+        self.assertEqual(
+            respuesta.status_code,
+            403
+        )
+
         self.verificador.assert_not_called()
 
-    def test_verificacion_coach_no_autorizado(self):
+    def test_verificacion_coach_autorizado(self):
 
         self.client.force_authenticate(
             user=self.coach
@@ -398,8 +410,28 @@ class VerificacionFacialTest(
 
         respuesta = self.verificar()
 
-        self.assertEqual(respuesta.status_code, 403)
-        self.verificador.assert_not_called()
+        self.assertEqual(
+            respuesta.status_code,
+            200,
+            respuesta.data
+        )
+
+        self.assertTrue(
+            respuesta.data["verificado"]
+        )
+
+        self.assertFalse(
+            respuesta.data["asistencia_registrada"]
+        )
+
+        self.verificador.assert_called_once()
+
+        self.reserva.refresh_from_db()
+
+        self.assertEqual(
+            self.reserva.asistencia,
+            Reserva.Asistencia.PENDIENTE
+        )
 
     def test_verificacion_sin_autenticacion(self):
 
@@ -433,4 +465,119 @@ class VerificacionFacialTest(
         self.assertEqual(
             self.verificador.call_count,
             5
+        )
+
+    def test_otro_coach_no_puede_verificar(self):
+
+        self.client.force_authenticate(
+            user=self.otro_coach
+        )
+
+        respuesta = self.verificar()
+
+        self.comprobar_error(
+            respuesta,
+            "RESERVA_NO_VALIDA",
+            404
+        )
+
+        self.verificador.assert_not_called()
+
+    def test_verificacion_clase_inactiva(self):
+
+        self.clase.activa = False
+
+        self.clase.save(
+            update_fields=["activa"]
+        )
+
+        respuesta = self.verificar()
+
+        self.comprobar_error(
+            respuesta,
+            "CLASE_INACTIVA"
+        )
+
+        self.verificador.assert_not_called()
+
+    def test_verificacion_fecha_no_valida(self):
+
+        self.clase.fecha += timedelta(days=1)
+
+        self.clase.save(
+            update_fields=["fecha"]
+        )
+
+        respuesta = self.verificar()
+
+        self.comprobar_error(
+            respuesta,
+            "FECHA_NO_VALIDA"
+        )
+
+        self.verificador.assert_not_called()
+
+    def test_verificacion_socio_inactivo(self):
+
+        self.socio.is_active = False
+
+        self.socio.save(
+            update_fields=["is_active"]
+        )
+
+        respuesta = self.verificar()
+
+        self.comprobar_error(
+            respuesta,
+            "SOCIO_NO_VALIDO"
+        )
+
+        self.verificador.assert_not_called()
+
+    def test_verificacion_sin_datos_biometricos(self):
+
+        self.registro.datos_biometricos_cifrados = None
+
+        self.registro.save(
+            update_fields=[
+                "datos_biometricos_cifrados"
+            ]
+        )
+
+        respuesta = self.verificar()
+
+        self.comprobar_error(
+            respuesta,
+            "RECONOCIMIENTO_INACTIVO"
+        )
+
+        self.verificador.assert_not_called()
+
+    def test_verificacion_identificadores_correctos(self):
+
+        respuesta = self.verificar()
+
+        self.assertEqual(
+            respuesta.status_code,
+            200,
+            respuesta.data
+        )
+
+        self.assertEqual(
+            respuesta.data["reserva_id"],
+            self.reserva.id
+        )
+
+        self.assertEqual(
+            respuesta.data["clase_id"],
+            self.clase.id
+        )
+
+        self.assertEqual(
+            respuesta.data["socio_id"],
+            self.socio.id
+        )
+
+        self.assertFalse(
+            respuesta.data["asistencia_registrada"]
         )
